@@ -1476,6 +1476,50 @@ class SolverMuJoCo(SolverBase):
 
             add_geoms(child)
 
+        # Add fixed tendons from Newton model
+        if hasattr(model, "fixed_tendon_count") and model.fixed_tendon_count > 0:
+            # Access tendon data arrays on host
+            fixed_tendon_joint_starts = (
+                model.fixed_tendon_joint_starts.numpy() if hasattr(model.fixed_tendon_joint_starts, "numpy") else model.fixed_tendon_joint_starts
+            )
+            fixed_tendon_LMin = (
+                model.fixed_tendon_LMin.numpy() if hasattr(model.fixed_tendon_LMin, "numpy") else model.fixed_tendon_LMin
+            )
+            fixed_tendon_LMax = (
+                model.fixed_tendon_LMax.numpy() if hasattr(model.fixed_tendon_LMax, "numpy") else model.fixed_tendon_LMax
+            )
+            fixed_tendon_joints = (
+                model.fixed_tendon_joints.numpy() if hasattr(model.fixed_tendon_joints, "numpy") else model.fixed_tendon_joints
+            )
+            fixed_tendon_gearings = (
+                model.fixed_tendon_gearings.numpy() if hasattr(model.fixed_tendon_gearings, "numpy") else model.fixed_tendon_gearings
+            )
+
+            # Track tendon names to ensure uniqueness across environments
+            tendon_name_counts = {}
+
+            # Add each tendon
+            for i in range(model.fixed_tendon_count):
+                # Get the joints and gearings for this tendon
+                start_idx = fixed_tendon_joint_starts[i]
+                end_idx = fixed_tendon_joint_starts[i + 1]
+
+                # Check if all joints in this tendon are in the selected set
+                # Only add tendons where all joints are selected
+                all_joints_selected = True
+                for j in range(start_idx, end_idx):
+                    joint_idx = fixed_tendon_joints[j]
+                    if joint_idx not in selected_joints:
+                        all_joints_selected = False
+                        break
+
+                # Skip this tendon if not all joints are selected
+                if not all_joints_selected:
+                    continue	
+
+                # Add the tendons now.
+                # This is not done.	
+
         for i in selected_constraints:
             constraint_type = eq_constraint_type[i]
             if constraint_type == EqType.CONNECT:

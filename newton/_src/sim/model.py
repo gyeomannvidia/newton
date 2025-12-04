@@ -276,6 +276,19 @@ class Model:
         self.muscle_activations = None
         """Muscle activations, shape [muscle_count], float."""
 
+        self.fixed_tendon_joint_starts = None
+        """Start indices for each tendon's joint attachments, shape [tendon_count + 1], int."""
+        self.fixed_tendon_joints = None
+        """Joint indices that tendons attach to, int."""
+        self.fixed_tendon_gearings = None
+        """Gearing coefficients for each joint attachment, float."""
+        self.fixed_tendon_LMin = None
+        """Tendon length lower limit, shape [tendon_count], float."""
+        self.fixed_tendon_LMax = None
+        """Tendon length lower limit), shape [tendon_count], float."""
+        self.tendon_keys = []
+        """Tendon keys/names, shape [tendon_count], str."""
+
         self.body_q = None
         """Rigid body poses for state initialization, shape [body_count, 7], float."""
         self.body_qd = None
@@ -428,6 +441,8 @@ class Model:
         """Total number of springs in the system."""
         self.muscle_count = 0
         """Total number of muscles in the system."""
+        self.fixed_tendon_count = 0
+        """Total number of tendons in the system."""
         self.articulation_count = 0
         """Total number of articulations in the system."""
         self.joint_dof_count = 0

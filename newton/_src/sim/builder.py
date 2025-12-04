@@ -533,6 +533,14 @@ class ModelBuilder:
         self.muscle_bodies = []
         self.muscle_points = []
 
+        # fixed tendons 
+        self.fixed_tendon_joints = []
+        self.fixed_tendon_gearings = [] 
+        self.fixed_tendon_joint_starts = [] 
+        self.fixed_tendon_L_min = []
+        self.fixed_tendon_L_max = []
+        self.fixed_tendon_keys = []  
+
         # rigid bodies
         self.body_mass = []
         self.body_inertia = []
@@ -1677,10 +1685,32 @@ class ModelBuilder:
             "tet_poses",
             "tet_activations",
             "tet_materials",
+            "fixed_tendon_keys",
+            "fixed_tendon_L_min",
+            "fixed_tendon_L_max"
         ]
 
         for attr in more_builder_attrs:
             getattr(self, attr).extend(getattr(builder, attr))
+
+        # Copy fixed tendons from the builder being added.
+        nb_new_tendons = len(builder.fixed_tendon_joint_starts)
+        if nb_new_tendons > 0:
+
+            # Update fixed_tendon_joints_start indices to account for existing tendons
+            nb_existing_tendon_joints = len(self.fixed_tendon_joints)
+            for i in range(0, nb_new_tendons):
+                self.fixed_tendon_joint_starts.append(nb_existing_tendon_joints + builder.fixed_tendon_joint_starts[i])
+
+            # The joint offset to apply to tendon joint references.
+            # We've already added the joints so self.joint_count
+            # already accounts for the joints in the builder being added.
+            joint_offset = self.joint_count - builder.joint_count
+            for joint_idx in builder.fixed_tendon_joints:
+                self.fixed_tendon_joints.append(joint_idx + joint_offset)
+
+            # The tendon gearings can be copied directly.
+            self.fixed_tendon_gearings.extend(builder.fixed_tendon_gearings)            
 
         self.joint_dof_count += builder.joint_dof_count
         self.joint_coord_count += builder.joint_coord_count
@@ -3081,6 +3111,84 @@ class ModelBuilder:
 
         # return the index of the muscle
         return len(self.muscle_start) - 1
+    
+    def add_fixed_tendon(
+        self,
+        key: str | None = None,
+        joints: list[int] = [],
+        gearings: list[float] = [],
+        L_max: float = float("inf"),
+        L_min: float = float("-inf"),
+    ) -> int:
+        """
+        Adds a fixed tendon to the model.
+        Fixed tendons enforce limits on a weighted sum of joint positions.
+        Each joint referenced by the tendon has an associated gearing value.
+        At least one gearing ratio must have a non-zero value to avoid a degenerate
+        fixed tendon.
+        There must be at least two joints in a fixed tendon.
+        The length (q) of the tendon is computed as follows:
+            q = sum {gearings[i] * jointPosition[joints[i]}
+        The fixed tendon enforces the rule that the tendon length q is maintained in 
+        a specified range.
+        Each joint in the fixed tendon must be either a revolute or prismatic joint.
+        Each joint referenced by the tendon must be referenced only once.
+        Fixed tendons may also be actuated to produce desired outcomes for 
+        the weighted sums of joint position, velocity and force
+
+        Args:
+            key (str | None): An optional unique key for the tendon.
+            joints (list[int]): List of joint indices the tendon passes through.
+            gearings (list[float]): List of gearings for each joint. Must match the length of joints.
+            L_max (float): Maximum tendon length.
+            L_min (float): Minimum tendon length.
+
+        Returns:
+            int: The index of the fixed tendon in the model.
+        """
+        if len(joints) < 2:
+            raise ValueError("joint_ids must have at least two entries.")
+
+        if len(joints) != len(gearings):
+            raise ValueError("Length of joint_ids and gearings must match.")
+
+        if not any(g != 0.0 for g in gearings):
+            raise ValueError("At least one value in the gearings list must be non-zero for a fixed tendon.")
+
+        # Check that each joint_id refers to a prismatic or revolute joint
+        for jid in joints:
+            joint_type = self.joint_type[jid]
+            if joint_type not in (JointType.REVOLUTE, JointType.PRISMATIC):
+                raise ValueError(
+                    f"Joint ID {jid} is not a prismatic or revolute joint. Found joint type: {joint_type}."
+                )
+
+        # Ensure per-tendon lists exist (for backward compatibility in legacy ModelBuilder)
+        if not hasattr(self, 'fixed_tendon_joints'):
+            self.fixed_tendon_joints = []
+        if not hasattr(self, 'fixed_tendon_gearings'):
+            self.fixed_tendon_gearings = []
+        if not hasattr(self, 'fixed_tendon_L_min'):
+            self.fixed_tendon_L_min = []
+        if not hasattr(self, 'fixed_tendon_L_max'):
+            self.fixed_tendon_L_max = []
+        if not hasattr(self, 'fixed_tendon_keys'):
+            self.fixed_tendon_keys = []
+        if not hasattr(self, 'fixed_tendon_joint_starts'):
+            self.fixed_tendon_joint_starts = []
+
+
+        # Extend per-tendon lists
+        self.fixed_tendon_joint_starts.append(len(self.fixed_tendon_joints))
+        self.fixed_tendon_joints.extend(joints)
+        self.fixed_tendon_gearings.extend(gearings)
+        self.fixed_tendon_L_min.append(L_min)
+        self.fixed_tendon_L_max.append(L_max)
+        if key is None:
+            key = f"fixed_tendon_{len(self.fixed_tendon_L_min) - 1}"
+        self.fixed_tendon_keys.append(str(key))
+
+        return len(self.fixed_tendon_L_min) - 1
 
     # region shapes
 
@@ -5240,6 +5348,20 @@ class ModelBuilder:
             m.muscle_points = wp.array(self.muscle_points, dtype=wp.vec3, requires_grad=requires_grad)
             m.muscle_activations = wp.array(self.muscle_activations, dtype=wp.float32, requires_grad=requires_grad)
 
+            # -----------------------
+            # tendons
+
+            # close the tendon joint indices
+            fixed_tendon_joint_starts = copy.copy(self.fixed_tendon_joint_starts)
+            fixed_tendon_joint_starts.append(len(self.fixed_tendon_joints))
+            m.fixed_tendon_joint_starts = wp.array(fixed_tendon_joint_starts, dtype=wp.int32)
+            m.fixed_tendon_joints = wp.array(self.fixed_tendon_joints, dtype=wp.int32)
+            m.fixed_tendon_gearings = wp.array(self.fixed_tendon_gearings, dtype=wp.float32, requires_grad=requires_grad)
+            m.fixed_tendon_LMin = wp.array(self.fixed_tendon_L_min, dtype=wp.float32, requires_grad=requires_grad)
+            m.fixed_tendon_LMax = wp.array(self.fixed_tendon_L_max, dtype=wp.float32, requires_grad=requires_grad)
+            m.fixed_tendon_keys = self.fixed_tendon_keys
+
+
             # --------------------------------------
             # rigid bodies
 
@@ -5420,6 +5542,7 @@ class ModelBuilder:
             m.edge_count = len(self.edge_rest_angle)
             m.spring_count = len(self.spring_rest_length)
             m.muscle_count = len(self.muscle_start)
+            m.fixed_tendon_count = len(self.fixed_tendon_joint_starts)
             m.articulation_count = len(self.articulation_start)
             m.equality_constraint_count = len(self.equality_constraint_type)
 
