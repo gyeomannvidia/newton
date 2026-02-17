@@ -1244,6 +1244,7 @@ class SolverMuJoCo(SolverBase):
         mujoco_attrs = model.mujoco
 
         # Get tendon arrays
+        tendon_key = mujoco_attrs.tendon_key
         tendon_world = mujoco_attrs.tendon_world.numpy()
         tendon_stiffness = getattr(mujoco_attrs, "tendon_stiffness", None)
         tendon_stiffness_np = tendon_stiffness.numpy() if tendon_stiffness is not None else None
@@ -1300,7 +1301,7 @@ class SolverMuJoCo(SolverBase):
             selected_tendons.append(i)
 
             # Create tendon with a unique name
-            tendon_name = f"tendon_{i}"
+            tendon_name = tendon_key[i]
             tendon_names.append(tendon_name)
             t = spec.add_tendon()
             t.name = tendon_name
@@ -2529,6 +2530,8 @@ class SolverMuJoCo(SolverBase):
         eq_constraint_relpose = model.equality_constraint_relpose.numpy()
         eq_constraint_joint1 = model.equality_constraint_joint1.numpy()
         eq_constraint_joint2 = model.equality_constraint_joint2.numpy()
+        eq_constraint_tendon1 = model.equality_constraint_tendon1.numpy()
+        eq_constraint_tendon2 = model.equality_constraint_tendon2.numpy()
         eq_constraint_polycoef = model.equality_constraint_polycoef.numpy()
         eq_constraint_enabled = model.equality_constraint_enabled.numpy()
         eq_constraint_world = model.equality_constraint_world.numpy()
@@ -3160,6 +3163,15 @@ class SolverMuJoCo(SolverBase):
                 return "world"
             return model.body_key[body_idx]
 
+        # Retrieve tendon name for the equality constraint via custom attribute
+        mujoco_attrs = getattr(model, "mujoco", None)
+        tendon_key = mujoco_attrs.tendon_key if mujoco_attrs else None
+
+        def get_tendon_name(tendon_idx: int) -> str:
+            if tendon_idx == -1:
+                return "tendon"
+            return tendon_key[tendon_idx]
+
         for i in selected_constraints:
             constraint_type = eq_constraint_type[i]
             if constraint_type == EqType.CONNECT:
@@ -3193,6 +3205,19 @@ class SolverMuJoCo(SolverBase):
                 eq.data[3:6] = wp.transform_get_translation(cns_relpose)
                 eq.data[6:10] = wp.transform_get_rotation(cns_relpose)
                 eq.data[10] = eq_constraint_torquescale[i]
+                if eq_constraint_solref is not None:
+                    eq.solref = eq_constraint_solref[i]
+
+            elif constraint_type == EqType.TENDON:
+                # if mujoco_attrs is None:
+
+                # Handle tendon equality constraint
+                eq = spec.add_equality(objtype=mujoco.mjtObj.mjOBJ_TENDON)
+                eq.type = mujoco.mjtEq.mjEQ_TENDON
+                eq.active = eq_constraint_enabled[i]
+                eq.name1 = get_tendon_name(eq_constraint_tendon1[i])
+                eq.name2 = get_tendon_name(eq_constraint_tendon2[i])
+                eq.data[0:5] = eq_constraint_polycoef[i]
                 if eq_constraint_solref is not None:
                     eq.solref = eq_constraint_solref[i]
 

@@ -775,6 +775,8 @@ class ModelBuilder:
         self.equality_constraint_torquescale = []
         self.equality_constraint_joint1 = []
         self.equality_constraint_joint2 = []
+        self.equality_constraint_tendon1 = []
+        self.equality_constraint_tendon2 = []
         self.equality_constraint_polycoef = []
         self.equality_constraint_key = []
         self.equality_constraint_enabled = []
@@ -3195,6 +3197,8 @@ class ModelBuilder:
         relpose: Transform | None = None,
         joint1: int = -1,
         joint2: int = -1,
+        tendon1: int = -1,
+        tendon2: int = -1,
         polycoef: list[float] | None = None,
         key: str | None = None,
         enabled: bool = True,
@@ -3203,7 +3207,7 @@ class ModelBuilder:
         """Generic method to add any type of equality constraint to this ModelBuilder.
 
         Args:
-            constraint_type (constant): Type of constraint ('connect', 'weld', 'joint')
+            constraint_type (constant): Type of constraint ('connect', 'weld', 'joint', 'tendon')
             body1 (int): Index of the first body participating in the constraint (-1 for world)
             body2 (int): Index of the second body participating in the constraint (-1 for world)
             anchor (Vec3): Anchor point on body1
@@ -3211,7 +3215,9 @@ class ModelBuilder:
             relpose (Transform): Relative pose of body2 for weld. If None, the identity transform is used.
             joint1 (int): Index of the first joint for joint coupling
             joint2 (int): Index of the second joint for joint coupling
-            polycoef (list[float]): Polynomial coefficients for joint coupling
+            tendon1 (int): Index of the first tendon for tendon coupling
+            tendon2 (int): Index of the second tendon for tendon coupling
+            polycoef (list[float]): Polynomial coefficients for joint or tendon coupling
             key (str): Optional constraint name
             enabled (bool): Whether constraint is active
             custom_attributes (dict): Custom attributes to set on the constraint
@@ -3228,6 +3234,8 @@ class ModelBuilder:
         self.equality_constraint_relpose.append(relpose or wp.transform_identity())
         self.equality_constraint_joint1.append(joint1)
         self.equality_constraint_joint2.append(joint2)
+        self.equality_constraint_tendon1.append(tendon1)
+        self.equality_constraint_tendon2.append(tendon2)
         self.equality_constraint_polycoef.append(polycoef or [0.0, 0.0, 0.0, 0.0, 0.0])
         self.equality_constraint_key.append(key)
         self.equality_constraint_enabled.append(enabled)
@@ -3351,6 +3359,40 @@ class ModelBuilder:
             custom_attributes=custom_attributes,
             key=key,
             enabled=enabled,
+        )
+
+    def add_equality_constraint_tendon(
+        self,
+        tendon1: int = -1,
+        tendon2: int = -1,
+        polycoef: list[float] | None = None,
+        key: str | None = None,
+        enabled: bool = True,
+        custom_attributes: dict[str, Any] | None = None,
+    ) -> int:
+        """Adds a tendon equality constraint to the model.
+        Constrains the length of one tendon to be a quartic polynomial of another tendon's length.
+
+        Args:
+            tendon1: Index of the first tendon
+            tendon2: Index of the second tendon
+            polycoef: Polynomial coefficients for tendon coupling
+            key: Optional constraint name
+            enabled: Whether constraint is active
+            custom_attributes: Custom attributes to set on the constraint
+
+        Returns:
+            Constraint index
+        """
+
+        return self.add_equality_constraint(
+            constraint_type=EqType.TENDON,
+            tendon1=tendon1,
+            tendon2=tendon2,
+            polycoef=polycoef,
+            key=key,
+            enabled=enabled,
+            custom_attributes=custom_attributes,
         )
 
     # endregion
@@ -3886,6 +3928,12 @@ class ModelBuilder:
                 if verbose:
                     print(f"Warning: Equality constraint references removed joint {old_joint2}, disabling constraint")
                 self.equality_constraint_enabled[i] = False
+
+            # Tendon indices don't need remapping since tendons are stored as custom attributes
+            # and their joint references are handled separately through custom attribute updates.
+            # However, if joints referenced by tendons are removed, the tendons themselves
+            # may become invalid. This is not checked here.
+            # self.equality_constraint_tendon1[i] and self.equality_constraint_tendon2[i] remain unchanged
 
         return {
             "body_remap": body_remap,
@@ -7662,6 +7710,8 @@ class ModelBuilder:
             )
             m.equality_constraint_joint1 = wp.array(self.equality_constraint_joint1, dtype=wp.int32)
             m.equality_constraint_joint2 = wp.array(self.equality_constraint_joint2, dtype=wp.int32)
+            m.equality_constraint_tendon1 = wp.array(self.equality_constraint_tendon1, dtype=wp.int32)
+            m.equality_constraint_tendon2 = wp.array(self.equality_constraint_tendon2, dtype=wp.int32)
             m.equality_constraint_polycoef = wp.array(self.equality_constraint_polycoef, dtype=wp.float32)
             m.equality_constraint_key = self.equality_constraint_key
             m.equality_constraint_enabled = wp.array(self.equality_constraint_enabled, dtype=wp.bool)

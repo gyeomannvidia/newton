@@ -20,6 +20,7 @@ import numpy as np
 import warp as wp
 
 import newton
+from newton.solvers import SolverMuJoCo
 
 
 class TestEqualityConstraints(unittest.TestCase):
@@ -366,6 +367,101 @@ class TestEqualityConstraints(unittest.TestCase):
         self.assertEqual(model.body_count, 3)
         self.assertEqual(model.joint_count, 3)
         self.assertEqual(model.equality_constraint_count, 3)
+
+    def test_equality_constraint_tendon_mjcf(self):
+        """Test that equality constraints can be parsed for tendons from mjcf."""
+        mjcf = """<?xml version="1.0" ?>
+<mujoco model="equality_constraint_of_tendons">
+  <compiler angle="degree"/>
+  <worldbody>
+
+     <!-- Root body (fixed to world) -->
+    <body name="root" pos="0 0 0">
+      <geom type="box" size="0.1 0.1 0.1" rgba="0.5 0.5 0.5 1"/>
+
+      <!-- First child link with prismatic joint along x -->
+      <body name="link1" pos="0.0 -0.5 0">
+        <joint name="joint1" type="slide" axis="1 0 0" range="-50.5 50.5"/>
+        <geom solmix="1.0" type="cylinder" size="0.05 0.025" rgba="1 0 0 1" euler="0 90 0"/>
+        <inertial pos="0 0 0" mass="1" diaginertia="0.01 0.01 0.01"/>
+      </body>
+
+       <!-- Second child link with prismatic joint along x -->
+      <body name="link2" pos="-0.0 -0.7 0">
+        <joint name="joint2" type="slide" axis="1 0 0" range="-50.5 50.5"/>
+        <geom type="cylinder" size="0.05 0.025" rgba="0 0 1 1" euler="0 90 0"/>
+        <inertial pos="0 0 0" mass="1" diaginertia="0.01 0.01 0.01"/>
+      </body>
+
+      <!-- Third child link with prismatic joint along x -->
+      <body name="link3" pos="-0.0 -0.9 0">
+        <joint name="joint3" type="slide" axis="1 0 0" range="-50.5 50.5"/>
+        <geom type="cylinder" size="0.05 0.025" rgba="0 1 0 1" euler="0 90 0"/>
+        <inertial pos="0 0 0" mass="1" diaginertia="0.01 0.01 0.01"/>
+      </body>
+
+      <!-- Third child link with prismatic joint along x -->
+      <body name="link4" pos="-0.0 -1.1 0">
+        <joint name="joint4" type="slide" axis="1 0 0" range="-50.5 50.5"/>
+        <geom type="cylinder" size="0.05 0.025" rgba="0 1 0 1" euler="0 90 0"/>
+        <inertial pos="0 0 0" mass="1" diaginertia="0.01 0.01 0.01"/>
+      </body>
+
+    </body>
+  </worldbody>
+
+  <tendon>
+    <!-- First fixed tendon coupling joint1 and joint2 -->
+    <fixed name="tendon12" stiffness="0" damping="0">
+      <joint joint="joint1" coef="1"/>
+      <joint joint="joint2" coef="1"/>
+    </fixed>
+
+    <!-- Second fixed tendon coupling joint2 and joint3 -->
+    <fixed name="tendon34" stiffness="0" damping="0">
+      <joint joint="joint3" coef="1"/>
+      <joint joint="joint4" coef="1"/>
+    </fixed>
+  </tendon>
+
+  <!-- Equality constraint tying the two tendons together -->
+  <equality>
+    <tendon name="tendon_couple" polycoef="0 1 0 0 0" tendon1="tendon12" tendon2="tendon34"/>
+  </equality>
+
+  <actuator>
+    <position name="joint1_pos" ctrlrange="-0.1 0.1" joint="joint1" kp="100" kv="10"/>
+  </actuator>
+
+</mujoco>
+"""
+
+        builder = newton.ModelBuilder()
+        SolverMuJoCo.register_custom_attributes(builder)
+        builder.add_mjcf(mjcf, ignore_inertial_definitions=False)
+        builder.joint_target_pos[0] = 0.1
+
+        dt = 0.002
+
+        model = builder.finalize()
+        state_0 = model.state()
+        state_1 = model.state()
+        control = model.control()
+        contacts = model.collide(state_0)
+
+        print(control.joint_target_pos)
+
+        solver = SolverMuJoCo(model)
+
+        for _i in range(0, 200):
+            solver.step(state_in=state_0, state_out=state_1, contacts=contacts, control=control, dt=dt)
+            state_0, state_1 = state_1, state_0
+            joint_q = state_0.joint_q.numpy()
+            length12 = joint_q[0] + joint_q[1]
+            length34 = joint_q[2] + joint_q[3]
+            print(length12, length34)
+            # vals = [state_0.joint_q.numpy()[0], state_0.joint_q.numpy()[1]]
+            # print(",".join(map(str, vals)))
 
 
 if __name__ == "__main__":

@@ -121,6 +121,9 @@ class EqType(IntEnum):
     JOINT = 2
     """Constrains the position or angle of one joint to be a quartic polynomial of another joint (like a prismatic or revolute joint)."""
 
+    TENDON = 3
+    """Constrains the length of one tendon to be a quartic polynomial of another tendon's length."""
+
 
 class ActuatorMode(IntEnum):
     """

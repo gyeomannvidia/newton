@@ -547,6 +547,10 @@ class Model:
         """First joint index, shape [equality_constraint_count], int."""
         self.equality_constraint_joint2 = None
         """Second joint index, shape [equality_constraint_count], int."""
+        self.equality_constraint_tendon1 = None
+        """First tendon index, shape [equality_constraint_count], int."""
+        self.equality_constraint_tendon2 = None
+        """Second tendon index, shape [equality_constraint_count], int."""
         self.equality_constraint_polycoef = None
         """Polynomial coefficients, shape [equality_constraint_count, 2], float."""
         self.equality_constraint_key = []
