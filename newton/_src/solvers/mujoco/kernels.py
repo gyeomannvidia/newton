@@ -1697,12 +1697,11 @@ def update_geom_properties_kernel(
     if shape_geom_solmix:
         geom_solmix[world, geom_idx] = shape_geom_solmix[shape_idx]
 
-    # update geom_gap from custom attribute
-    if shape_geom_gap:
-        geom_gap[world, geom_idx] = shape_geom_gap[shape_idx]
+    # update geom_gap from shape_gap
+    geom_gap[world, geom_idx] = shape_geom_gap[shape_idx]
 
     # update geom_margin from shape_margin
-    geom_margin[world, geom_idx] = shape_margin[shape_idx]
+    geom_margin[world, geom_idx] = shape_margin[shape_idx] + shape_geom_gap[shape_idx]
 
     # update size
     geom_size[world, geom_idx] = shape_size[shape_idx]
