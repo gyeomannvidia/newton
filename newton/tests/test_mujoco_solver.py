@@ -4668,6 +4668,8 @@ class TestMuJoCoMocapBodies(unittest.TestCase):
         builder.default_shape_cfg.ke = 1e4
         builder.default_shape_cfg.kd = 1000.0
         builder.default_shape_cfg.mu = 0.5
+        builder.default_shape_cfg.margin = 0.0
+        builder.default_shape_cfg.gap = 0.0
 
         # Create fixed-base (mocap) body at root (at origin)
         # This body will have a FIXED joint to the world, making it a mocap body in MuJoCo
