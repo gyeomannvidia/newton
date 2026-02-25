@@ -2337,19 +2337,17 @@ class TestImportMjcfSolverParams(unittest.TestCase):
         self.assertAlmostEqual(builder.shape_material_mu_rolling[4], 0.0001, places=5)
 
     def test_mjcf_geom_margin_parsing(self):
-        """Test MJCF geom margin is parsed to shape thickness.
-
-        Verifies that MJCF geom margin values are mapped to shape thickness and
-        that geoms without an explicit margin use the default thickness.
-        Also checks that the model scale is applied to the margin value.
+        """Test MJCF geom margin and gap are parsed correctly.
+        Verifies that MJCF geom margin and gap values are mapped to newton margin and gap values.
+        Also checks that the model scale is applied to the margin and gap values.
         """
         mjcf_content = """
         <mujoco>
             <worldbody>
                 <body name="test_body">
-                    <geom name="geom1" type="box" size="0.1 0.1 0.1" margin="0.003"/>
-                    <geom name="geom2" type="sphere" size="0.1" margin="0.01"/>
-                    <geom name="geom3" type="capsule" size="0.1 0.2"/>
+                    <geom name="geom1" type="box" size="0.1 0.1 0.1" gap="0.01" margin="0.003"/>
+                    <geom name="geom2" type="sphere" size="0.1" gap="0.03" margin="0.01"/>
+                    <geom name="geom3" type="capsule" size="0.1 0.2" gap="0.01"/>
                 </body>
             </worldbody>
         </mujoco>
@@ -2357,17 +2355,59 @@ class TestImportMjcfSolverParams(unittest.TestCase):
         builder = newton.ModelBuilder()
         builder.add_mjcf(mjcf_content, up_axis="Z")
 
-        self.assertEqual(builder.shape_count, 3)
-        self.assertAlmostEqual(builder.shape_margin[0], 0.003, places=6)
-        self.assertAlmostEqual(builder.shape_margin[1], 0.01, places=6)
-        # geom3 has no margin, should use ShapeConfig default (0.0)
-        self.assertAlmostEqual(builder.shape_margin[2], 0.0, places=8)
+        # We have the following relationship:
+        # mujoco margin = newton margin + newton gap
+        # mujoco gap = newton gap
+        # Rearrrange for newton margin and newton gap
+        # newton gap = newton margin
+        # newton margin = mujoco margin - newton gap
+        expected_newton_margins = [0.003 - 0.01, 0.01 - 0.03, 0.0 - 0.01]
 
-        # Verify scale is applied to margin
+        # Verify the builder has the correct margin values.
+        self.assertEqual(builder.shape_count, 3)
+        self.assertAlmostEqual(builder.shape_margin[0], expected_newton_margins[0], places=6)
+        self.assertAlmostEqual(builder.shape_margin[1], expected_newton_margins[1], places=6)
+        self.assertAlmostEqual(builder.shape_margin[2], expected_newton_margins[2], places=6)
+
+        # Verify the model has the correct margin values.
+        model = builder.finalize()
+        expected_model_margins = expected_newton_margins
+        measured_model_margins = model.shape_margin.numpy()
+        self.assertAlmostEqual(expected_model_margins[0], measured_model_margins[0], places=6)
+        self.assertAlmostEqual(expected_model_margins[1], measured_model_margins[1], places=6)
+        self.assertAlmostEqual(expected_model_margins[2], measured_model_margins[2], places=6)
+
+        # Verify the solver has the correct margin values.
+        solver = SolverMuJoCo(model)
+        expected_mjcf_margins = [0.003, 0.01, 0.0]
+        measured_mjcf_margins = solver.mjw_model.geom_margin.numpy()[0]
+        self.assertAlmostEqual(expected_mjcf_margins[0], measured_mjcf_margins[0], places=6)
+        self.assertAlmostEqual(expected_mjcf_margins[1], measured_mjcf_margins[1], places=6)
+        self.assertAlmostEqual(expected_mjcf_margins[2], measured_mjcf_margins[2], places=6)
+
+        # Verify scale is applied to margin.
+        expected_scaled_newton_margins = [2.0 * (0.003 - 0.01), 2.0 * (0.01 - 0.03), 2.0 * (0.0 - 0.01)]
         builder_scaled = newton.ModelBuilder()
         builder_scaled.add_mjcf(mjcf_content, up_axis="Z", scale=2.0)
-        self.assertAlmostEqual(builder_scaled.shape_margin[0], 0.006, places=6)
-        self.assertAlmostEqual(builder_scaled.shape_margin[1], 0.02, places=6)
+        self.assertAlmostEqual(builder_scaled.shape_margin[0], expected_scaled_newton_margins[0], places=6)
+        self.assertAlmostEqual(builder_scaled.shape_margin[1], expected_scaled_newton_margins[1], places=6)
+        self.assertAlmostEqual(builder_scaled.shape_margin[2], expected_scaled_newton_margins[2], places=6)
+
+        # Verify the model has the correct scaled margin values.
+        model_scaled = builder_scaled.finalize()
+        expected_model_margins = expected_scaled_newton_margins
+        measured_model_margins = model_scaled.shape_margin.numpy()
+        self.assertAlmostEqual(expected_model_margins[0], measured_model_margins[0], places=6)
+        self.assertAlmostEqual(expected_model_margins[1], measured_model_margins[1], places=6)
+        self.assertAlmostEqual(expected_model_margins[2], measured_model_margins[2], places=6)
+
+        # Verify the solver has the correct scaled margin values.
+        solver_scaled = SolverMuJoCo(model_scaled)
+        expected_mjcf_margins = [2.0 * 0.003, 2.0 * 0.01, 2.0 * 0.0]
+        measured_mjcf_margins = solver_scaled.mjw_model.geom_margin.numpy()[0]
+        self.assertAlmostEqual(expected_mjcf_margins[0], measured_mjcf_margins[0], places=6)
+        self.assertAlmostEqual(expected_mjcf_margins[1], measured_mjcf_margins[1], places=6)
+        self.assertAlmostEqual(expected_mjcf_margins[2], measured_mjcf_margins[2], places=6)
 
     def test_mjcf_geom_solref_parsing(self):
         """Test MJCF geom solref parsing for contact stiffness/damping.
@@ -3000,10 +3040,7 @@ class TestImportMjcfSolverParams(unittest.TestCase):
         builder.add_mjcf(mjcf)
         model = builder.finalize()
 
-        self.assertTrue(hasattr(model, "mujoco"), "Model should have mujoco namespace for custom attributes")
-        self.assertTrue(hasattr(model.mujoco, "geom_gap"), "Model should have geom_gap attribute")
-
-        geom_gap = model.mujoco.geom_gap.numpy()
+        geom_gap = model.shape_gap.numpy()
         self.assertEqual(model.shape_count, 3, "Should have 3 shapes")
 
         # Expected values: shape 0 has explicit solimp=0.5, shape 1 has solimp=default=1.0, shape 2 has explicit solimp=0.8
@@ -6055,7 +6092,7 @@ class TestMjcfDefaultCustomAttributes(unittest.TestCase):
         cls.model = cls.builder.finalize()
 
     def test_shape_defaults(self):
-        """SHAPE: condim, priority, solmix, gap, solimp."""
+        """SHAPE: condim, priority, solmix, solimp."""
         m = self.model.mujoco
         wb = "worldbody/b_default"
         idx = self.builder.shape_label.index
@@ -6064,14 +6101,12 @@ class TestMjcfDefaultCustomAttributes(unittest.TestCase):
         self.assertEqual(m.condim.numpy()[g_def], 4)
         self.assertEqual(m.geom_priority.numpy()[g_def], 5)
         self.assertAlmostEqual(float(m.geom_solmix.numpy()[g_def]), 2.0, places=5)
-        self.assertAlmostEqual(float(m.geom_gap.numpy()[g_def]), 0.01, places=5)
         np.testing.assert_allclose(m.geom_solimp.numpy()[g_def], [0.8, 0.9, 0.01, 0.4, 1.0], atol=1e-4)
 
         g_cls = idx(f"{wb}/b_class/g_class")
         self.assertEqual(m.condim.numpy()[g_cls], 6)
         self.assertEqual(m.geom_priority.numpy()[g_cls], 5)
         self.assertAlmostEqual(float(m.geom_solmix.numpy()[g_cls]), 5.0, places=5)
-        self.assertAlmostEqual(float(m.geom_gap.numpy()[g_cls]), 0.01, places=5)
         np.testing.assert_allclose(m.geom_solimp.numpy()[g_cls], [0.7, 0.85, 0.005, 0.3, 1.5], atol=1e-4)
 
         g_ovr = idx(f"{wb}/b_class/b_override/g_override")
@@ -6081,7 +6116,6 @@ class TestMjcfDefaultCustomAttributes(unittest.TestCase):
         self.assertEqual(m.condim.numpy()[g_child], 6)
         self.assertEqual(m.geom_priority.numpy()[g_child], 99)
         self.assertAlmostEqual(float(m.geom_solmix.numpy()[g_child]), 5.0, places=5)
-        self.assertAlmostEqual(float(m.geom_gap.numpy()[g_child]), 0.05, places=5)
 
     def test_body_defaults(self):
         """BODY: gravcomp."""
