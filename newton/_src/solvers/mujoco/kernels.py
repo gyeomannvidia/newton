@@ -100,7 +100,7 @@ def write_contact(
     contact_frame_out[cid] = frame_in
     contact_geom_out[cid] = geoms_in
     contact_worldid_out[cid] = worldid_in
-    contact_includemargin_out[cid] = margin_in - gap_in
+    contact_includemargin_out[cid] = margin_in + gap_in
     contact_dim_out[cid] = condim_in
     contact_friction_out[cid] = friction_in
     contact_solref_out[cid] = solref_in
