@@ -641,8 +641,22 @@ def parse_mjcf(
                     shape_cfg.kd = geom_kd
 
             # Parse MJCF margin for collision (only if explicitly specified)
+            # Set to mjcf default margin value and then override with parsed value.
+            margin = 0.0
             if "margin" in geom_attrib:
-                shape_cfg.margin = float(geom_attrib["margin"]) * scale
+                margin = float(geom_attrib["margin"]) * scale
+
+            # Set to mjcf default gap value and then override with parsed value.
+            gap = 0.0
+            if "gap" in geom_attrib:
+                gap = float(geom_attrib["gap"]) * scale
+
+            # We have the following mapping between mujoco and newto:
+            # mujoco margin = newton margin + newton gap
+            # mujoco gap = newton gap
+            # We need to map from mjc semantics to newton semantics here.
+            shape_cfg.margin = margin - gap
+            shape_cfg.gap = gap
 
             custom_attributes = parse_custom_attributes(geom_attrib, builder_custom_attr_shape, parsing_mode="mjcf")
             shape_label = f"{label_prefix}/{geom_name}" if label_prefix else geom_name
