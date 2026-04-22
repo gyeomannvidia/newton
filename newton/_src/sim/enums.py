@@ -131,6 +131,31 @@ class EqType(IntEnum):
     """Constrains the position or angle of one joint to be a quartic polynomial of another joint (like a prismatic or revolute joint)."""
 
 
+# Inverse dynamics compute-request flags
+class InverseDynamicsEvalType(IntEnum):
+    """
+    Bitmask flags selecting which quantities :class:`~newton.InverseDynamics` should compute.
+
+    Flags can be combined with bitwise-or to request multiple quantities
+    simultaneously; :attr:`EVAL_ALL` is the union of all individual flags.
+    """
+
+    EVAL_MASS_MATRIX = 1 << 0
+    """Compute the joint-space mass matrix M(q)."""
+
+    EVAL_GRAVITY_COMPENSATION_FORCE = 1 << 1
+    """Compute the gravity compensation generalized force G(q)."""
+
+    EVAL_CORIOLIS_COMPENSATION_FORCE = 1 << 2
+    """Compute the Coriolis compensation generalized force C(q, q_dot)."""
+
+    EVAL_COMPENSATION_FORCES = EVAL_GRAVITY_COMPENSATION_FORCE | EVAL_CORIOLIS_COMPENSATION_FORCE
+    """Compute the combined gravity and Coriolis compensation generalized forces G(q) + C(q, q_dot)."""
+
+    EVAL_ALL = EVAL_MASS_MATRIX | EVAL_GRAVITY_COMPENSATION_FORCE | EVAL_CORIOLIS_COMPENSATION_FORCE
+    """Compute the mass matrix and both compensation forces."""
+
+
 class JointTargetMode(IntEnum):
     """
     Enumeration of actuator modes for joint degrees of freedom.
@@ -203,6 +228,7 @@ class JointTargetMode(IntEnum):
 __all__ = [
     "BodyFlags",
     "EqType",
+    "InverseDynamicsEvalType",
     "JointTargetMode",
     "JointType",
 ]

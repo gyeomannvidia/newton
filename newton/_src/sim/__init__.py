@@ -9,10 +9,11 @@ from .control import Control
 from .enums import (
     BodyFlags,
     EqType,
+    InverseDynamicsEvalType,
     JointTargetMode,
     JointType,
 )
-from .inverse_dynamics import InverseDynamics
+from .inverse_dynamics import InverseDynamics, eval_inverse_dynamics
 from .model import Model
 from .state import State
 
@@ -23,6 +24,7 @@ __all__ = [
     "Control",
     "EqType",
     "InverseDynamics",
+    "InverseDynamicsEvalType",
     "JointTargetMode",
     "JointType",
     "Model",
@@ -30,6 +32,7 @@ __all__ = [
     "State",
     "eval_fk",
     "eval_ik",
+    "eval_inverse_dynamics",
     "eval_jacobian",
     "eval_mass_matrix",
 ]
