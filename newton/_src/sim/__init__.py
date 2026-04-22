@@ -12,6 +12,7 @@ from .enums import (
     JointTargetMode,
     JointType,
 )
+from .inverse_dynamics import InverseDynamics
 from .model import Model
 from .state import State
 
@@ -21,6 +22,7 @@ __all__ = [
     "Contacts",
     "Control",
     "EqType",
+    "InverseDynamics",
     "JointTargetMode",
     "JointType",
     "Model",
