@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
     from ..utils.heightfield import HeightfieldData
     from .collide import CollisionPipeline
+    from .inverse_dynamics import InverseDynamics
 
 
 class Model:
@@ -900,6 +901,26 @@ class Model:
             c, Model.AttributeAssignment.CONTROL, requires_grad=requires_grad, clone_arrays=clone_variables
         )
         return c
+
+    def inverse_dynamics(self) -> InverseDynamics:
+        """
+        Create and return a new :class:`~newton.InverseDynamics` object sized for this model.
+
+        The returned container allocates the mass matrix and compensation-force
+        buffers consistent with this model's articulation count, maximum DOFs per
+        articulation, and total joint DOF count.
+
+        Returns:
+            The inverse dynamics container.
+        """
+        from .inverse_dynamics import InverseDynamics  # noqa: PLC0415
+
+        return InverseDynamics(
+            max_dofs_per_articulation=self.max_dofs_per_articulation,
+            articulation_count=self.articulation_count,
+            joint_dof_count=self.joint_dof_count,
+            device=self.device,
+        )
 
     def set_gravity(
         self,
