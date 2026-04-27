@@ -7,6 +7,7 @@ gravity/Coriolis compensation-force helpers."""
 from __future__ import annotations
 
 import unittest
+from typing import ClassVar
 
 import numpy as np
 import warp as wp
@@ -58,14 +59,14 @@ class TestInverseDynamicsBase:
             identity_inertia = wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
             link_inertias = [identity_inertia, identity_inertia]
 
+        identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
+
         if joint_type == "revolute":
             add_dof_joint = builder.add_joint_revolute
         elif joint_type == "prismatic":
             add_dof_joint = builder.add_joint_prismatic
         else:
             raise ValueError(f"joint_type must be 'revolute' or 'prismatic', got {joint_type!r}.")
-
-        identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
 
         b1 = builder.add_link(
             xform=wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
@@ -172,9 +173,9 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
     # G(q) is genuinely insensitive to the inertia tensor (it depends only on
     # mass and CoM). Each test runs once with unit inertias and once with the
     # inertias scaled by 100.
-    I_UNIT = wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
-    I_100 = wp.mat33(100.0, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 100.0)
-    INERTIA_PASSES = [I_UNIT, I_100]
+    I_UNIT: ClassVar[wp.mat33] = wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+    I_100: ClassVar[wp.mat33] = wp.mat33(100.0, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 100.0)
+    INERTIA_PASSES: ClassVar[list[wp.mat33]] = [I_UNIT, I_100]
 
     def _test_two_link_gravity_compensation_force(
         self,
@@ -418,7 +419,7 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
                     0.0,
                     0.0,
                     0.0,
-                    0.0,  
+                    0.0,
                     0.0,  # World 1, fixed root, 1 dof
                     0.0,  # World 1, floating root, 6+1 dofs
                     0.0,
@@ -426,7 +427,7 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
                     0.0,
                     0.0,
                     0.0,
-                    0.0,  
+                    0.0,
                 ]
 
                 self._test_two_link_gravity_compensation_force(
@@ -488,21 +489,21 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
 
             expected_gravity_comp_forces = [
                 20.0,  # World 0, fixed root, 1 dof
-                0.0,   # World 0, floating root, 6+1 dofs
+                0.0,  # World 0, floating root, 6+1 dofs
                 70.0,
                 0.0,
                 0.0,
                 0.0,
                 0.0,
-                40,  
+                40,
                 60.0,  # World 1, fixed root, 1 dof
-                0.0,   # World 1, floating root, 6+1 dofs
+                0.0,  # World 1, floating root, 6+1 dofs
                 150.0,
                 0.0,
                 0.0,
                 0.0,
                 0.0,
-                80, 
+                80,
             ]
 
             self._test_two_link_gravity_compensation_force(
@@ -564,21 +565,21 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
 
             expected_gravity_comp_forces = [
                 20.0,  # World 0, fixed root, 1 dof
-                0.0,   # World 0, floating root, 6+1 dofs
+                0.0,  # World 0, floating root, 6+1 dofs
                 70.0,
                 0.0,
                 0.0,
                 0.0,
                 15,
-                40,  
+                40,
                 60.0,  # World 1, fixed root, 1 dof
-                0.0,   # World 1, floating root, 6+1 dofs
+                0.0,  # World 1, floating root, 6+1 dofs
                 150.0,
                 0.0,
                 0.0,
                 0.0,
                 75.0,
-                80,  
+                80,
             ]
 
             self._test_two_link_gravity_compensation_force(
@@ -664,7 +665,7 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
                 0.0,
                 0.0,
                 0.0,
-                0.0,  
+                0.0,
                 0.0,  # World 1, fixed root, 1 dof (internal prismatic)
                 0.0,  # World 1, floating root, 6+1 dofs
                 30.0,
@@ -672,7 +673,7 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
                 0.0,
                 0.0,
                 0.0,
-                0.0,  
+                0.0,
             ]
 
             self._test_two_link_gravity_compensation_force(
@@ -739,13 +740,13 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
 
             expected_gravity_comp_forces = [
                 80.0,  # World 0, fixed root, 1 dof
-                0.0,   # World 0, fjux root, 6+1 dofs
+                0.0,  # World 0, fjux root, 6+1 dofs
                 30.0,
                 0.0,
                 0.0,
                 0.0,
                 0.0,
-                0.0,  
+                0.0,
                 0.0,  # World 1, fixed root, 1 dof
                 0.0,  # World 1, floating root, 6+1 dofs
                 30.0,
@@ -753,7 +754,7 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
                 -80.0,
                 0.0,
                 0.0,
-                0.0,  
+                0.0,
             ]
 
             self._test_two_link_gravity_compensation_force(
@@ -840,7 +841,7 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
                 0.0,
                 0.0,
                 0.0,
-                0.0,  
+                0.0,
                 0.0,  # World 1, fixed root, 1 dof (internal revolute)
                 0.0,  # World 1, floating root, 6+1 dofs
                 30.0,
@@ -848,7 +849,7 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
                 0.0,
                 0.0,
                 0.0,
-                0.0,  
+                0.0,
             ]
 
             self._test_two_link_gravity_compensation_force(
