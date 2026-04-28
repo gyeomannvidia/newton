@@ -618,13 +618,18 @@ class TestGravCompForce(TestInverseDynamicsBase):
         # Build two per-articulation joint_q lists encoding +/- 90 deg
         # rotations about +Z, zero base position, and zero internal q.
         root_quat = wp.quat_from_axis_angle(wp.vec3(0.0, 0.0, 1.0), np.pi / 2.0)
-        floating_q_rot_z_90 = [
-            0.0, 0.0, 0.0, root_quat.x, root_quat.y, root_quat.z, root_quat.w, 0.0
-        ]
+        floating_q_rot_z_90 = [0.0, 0.0, 0.0, root_quat.x, root_quat.y, root_quat.z, root_quat.w, 0.0]
 
         root_quat_neg = wp.quat_from_axis_angle(wp.vec3(0.0, 0.0, 1.0), -np.pi / 2.0)
         floating_q_rot_z_neg90 = [
-            0.0, 0.0, 0.0, root_quat_neg.x, root_quat_neg.y, root_quat_neg.z, root_quat_neg.w, 0.0,
+            0.0,
+            0.0,
+            0.0,
+            root_quat_neg.x,
+            root_quat_neg.y,
+            root_quat_neg.z,
+            root_quat_neg.w,
+            0.0,
         ]
 
         joint_q = [
@@ -656,10 +661,34 @@ class TestGravCompForce(TestInverseDynamicsBase):
         # World0 a1 and World1 a0 use floating_q_rot_z_neg90; the other two
         # use floating_q_rot_z_90.
         expected_grav_comp_forces = [
-            0.0, 30.0, 0.0, 0.0, 0.0, 0.0, 20.0,    # W0 a0 [1, 2]: M=3, m_2=2  (+90 deg)
-            0.0, 70.0, 0.0, 0.0, 0.0, 0.0, -40.0,   # W0 a1 [3, 4]: M=7, m_2=4  (-90 deg)
-            0.0, 110.0, 0.0, 0.0, 0.0, 0.0, -60.0,  # W1 a0 [5, 6]: M=11, m_2=6 (-90 deg)
-            0.0, 150.0, 0.0, 0.0, 0.0, 0.0, 80.0,   # W1 a1 [7, 8]: M=15, m_2=8 (+90 deg)
+            0.0,
+            30.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            20.0,  # W0 a0 [1, 2]: M=3, m_2=2  (+90 deg)
+            0.0,
+            70.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -40.0,  # W0 a1 [3, 4]: M=7, m_2=4  (-90 deg)
+            0.0,
+            110.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -60.0,  # W1 a0 [5, 6]: M=11, m_2=6 (-90 deg)
+            0.0,
+            150.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            80.0,  # W1 a1 [7, 8]: M=15, m_2=8 (+90 deg)
         ]
 
         for I in self.INERTIA_PASSES:
@@ -733,12 +762,12 @@ class TestGravCompForce(TestInverseDynamicsBase):
         # +X to world -Y, used here on World0 a1 and World1 a0.
         joint_frames = [
             [
-                [parent_xform_rot_z_90, identity_xform],     # World0, articulation0 (+90 deg)
+                [parent_xform_rot_z_90, identity_xform],  # World0, articulation0 (+90 deg)
                 [parent_xform_rot_z_neg90, identity_xform],  # World0, articulation1 (-90 deg)
             ],
             [
                 [parent_xform_rot_z_neg90, identity_xform],  # World1, articulation0 (-90 deg)
-                [parent_xform_rot_z_90, identity_xform],     # World1, articulation1 (+90 deg)
+                [parent_xform_rot_z_90, identity_xform],  # World1, articulation1 (+90 deg)
             ],
         ]
 
@@ -765,10 +794,22 @@ class TestGravCompForce(TestInverseDynamicsBase):
         # For floating articulations: lin_y = M_total * 10 (total weight),
         # all other base entries = 0 (zero CoMs -> no lever arm).
         expected_grav_comp_forces = [
-            20.0,                                   # W0 a0 [1, 2]: fixed,    +90 deg, m_2=2
-            0.0, 70.0, 0.0, 0.0, 0.0, 0.0, -40.0,   # W0 a1 [3, 4]: floating, -90 deg, M=7, m_2=4
-            -60.0,                                  # W1 a0 [5, 6]: fixed,    -90 deg, m_2=6
-            0.0, 150.0, 0.0, 0.0, 0.0, 0.0, 80.0,   # W1 a1 [7, 8]: floating, +90 deg, M=15, m_2=8
+            20.0,  # W0 a0 [1, 2]: fixed,    +90 deg, m_2=2
+            0.0,
+            70.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -40.0,  # W0 a1 [3, 4]: floating, -90 deg, M=7, m_2=4
+            -60.0,  # W1 a0 [5, 6]: fixed,    -90 deg, m_2=6
+            0.0,
+            150.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            80.0,  # W1 a1 [7, 8]: floating, +90 deg, M=15, m_2=8
         ]
 
         for I in self.INERTIA_PASSES:
@@ -847,16 +888,16 @@ class TestGravCompForce(TestInverseDynamicsBase):
         ]
 
         expected_grav_comp_forces = [
-            20.0, # World 0, fixed root, 1 dof
-            0.0,  # World 0, floating root, 6+1 dofs
+            20.0,  # World 0, fixed root, 1 dof
+            0.0,   # World 0, floating root, 6+1 dofs
             70.0,
             0.0,
             0.0,
             0.0,
             15.0,
             40.0,
-            60.0, # World 1, fixed root, 1 dof
-            0.0,  # World 1, floating root, 6+1 dofs
+            60.0,  # World 1, fixed root, 1 dof
+            0.0,   # World 1, floating root, 6+1 dofs
             150.0,
             0.0,
             0.0,
