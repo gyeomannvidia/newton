@@ -38,6 +38,14 @@ class TestInverseDynamicsBase:
 
     device: wp.context.Device | None = None
 
+    # Per-link inertia tensors swept by tests in :class:`TestGravCompForce`
+    # to confirm G(q) is genuinely insensitive to the inertia tensor (it
+    # depends only on mass and CoM); also used as default inertias in the
+    # other test classes to avoid repeating the identity-inertia literal.
+    I_UNIT: ClassVar[wp.mat33] = wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+    I_100: ClassVar[wp.mat33] = wp.mat33(100.0, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 100.0)
+    INERTIA_PASSES: ClassVar[list[wp.mat33]] = [I_UNIT, I_100]
+
     @staticmethod
     def _build_two_link_pendulum(
         gravity: wp.vec3,
@@ -135,10 +143,7 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
                 wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
                 wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
             ],
-            link_inertias=[
-                wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
-                wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
-            ],
+            link_inertias=[self.I_UNIT, self.I_UNIT],
         )
         model = builder.finalize(device=self.device)
         state = self._pose_pendulum(model)
@@ -166,14 +171,6 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
 class TestGravCompForce(TestInverseDynamicsBase):
     """Gravity-compensation-force tests for the two-link pendulum harness."""
 
-    # Per-link inertia tensors swept by every test in this class to confirm
-    # G(q) is genuinely insensitive to the inertia tensor (it depends only on
-    # mass and CoM). Each test runs once with unit inertias and once with the
-    # inertias scaled by 100.
-    I_UNIT: ClassVar[wp.mat33] = wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
-    I_100: ClassVar[wp.mat33] = wp.mat33(100.0, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 100.0)
-    INERTIA_PASSES: ClassVar[list[wp.mat33]] = [I_UNIT, I_100]
-
     @staticmethod
     def _default_joint_q(is_floating_base: list[list[bool]]) -> list[list[list[float]]]:
         """Build the default initial-state ``joint_q`` for a multi-world,
@@ -188,7 +185,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
             for row in is_floating_base
         ]
 
-    def _test_two_link_gravity_compensation_force(
+    def _test_two_link_grav_comp_force(
         self,
         gravity_vec: wp.vec3,
         joint_type: str,
@@ -199,7 +196,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
         link_coms: list[list[list[wp.vec3]]],
         link_masses: list[list[list[float]]],
         link_inertias: list[list[list[wp.mat33]]],
-        expected_gravity_comp_forces: list[float],
+        expected_grav_comp_forces: list[float],
     ):
         """G(q) is populated correctly for a multi-world, multi-articulation model.
 
@@ -227,7 +224,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
             link_masses: Per-link masses ``[w][a][link]``.
             link_inertias: Per-link body-frame inertia tensors
                 ``[w][a][link]`` as ``wp.mat33``.
-            expected_gravity_comp_forces: Flat expected ``-G(q)`` in the order
+            expected_grav_comp_forces: Flat expected ``-G(q)`` in the order
                 Newton reports them.
         """
         gravity_scalar, up_axis = _gravity_vec_to_scalar_and_axis(gravity_vec)
@@ -240,22 +237,33 @@ class TestGravCompForce(TestInverseDynamicsBase):
         # caller's link_coms layout must agree.
         self.assertEqual(num_links_per_articulation, 2)
 
+        # Each articulation contributes 8 DOFs if floating (3 base position +
+        # 4 base quaternion + 1 internal q) or 1 DOF if fixed (just the
+        # internal q). Catching length mismatches here gives a clear error
+        # rather than letting an off-by-one in expected_grav_comp_forces
+        # silently shift every row that follows the typo.
+        expected_total_dofs = sum(8 if floating else 1 for row in is_floating_base for floating in row)
+        if len(expected_grav_comp_forces) != expected_total_dofs:
+            raise ValueError(
+                f"expected_grav_comp_forces has length {len(expected_grav_comp_forces)}, "
+                f"but is_floating_base implies {expected_total_dofs} total DOFs."
+            )
+
         # Build the model from the structured per-world / per-articulation inputs.
         model_builder = newton.ModelBuilder(gravity=gravity_scalar, up_axis=up_axis)
         for i in range(0, num_worlds):
             world_builder = newton.ModelBuilder(gravity=gravity_scalar, up_axis=up_axis)
             for j in range(0, num_arts_per_world):
-                kwargs = {
-                    "gravity": gravity_vec,
-                    "joint_type": joint_type,
-                    "joint_axis": joint_axis[i][j],
-                    "floating_base": is_floating_base[i][j],
-                    "link_coms": link_coms[i][j],
-                    "link_masses": link_masses[i][j],
-                    "joint_frames": joint_frames[i][j],
-                    "link_inertias": link_inertias[i][j],
-                }
-                articulation_builder = self._build_two_link_pendulum(**kwargs)
+                articulation_builder = self._build_two_link_pendulum(
+                    gravity=gravity_vec,
+                    joint_type=joint_type,
+                    joint_axis=joint_axis[i][j],
+                    floating_base=is_floating_base[i][j],
+                    link_coms=link_coms[i][j],
+                    link_masses=link_masses[i][j],
+                    joint_frames=joint_frames[i][j],
+                    link_inertias=link_inertias[i][j],
+                )
                 world_builder.add_builder(articulation_builder)
             model_builder.add_world(world_builder)
 
@@ -298,9 +306,9 @@ class TestGravCompForce(TestInverseDynamicsBase):
 
         # Newton's gravity_compensation_force returns G(q); the force the user
         # would apply to hold the articulation static is -G(q), which is what
-        # expected_gravity_comp_forces lists, so compare against -tau.
-        self.assertEqual(measured_gravity_comp_force.shape, (len(expected_gravity_comp_forces),))
-        np.testing.assert_allclose(-measured_gravity_comp_force, expected_gravity_comp_forces, atol=1e-5, rtol=1e-5)
+        # expected_grav_comp_forces lists, so compare against -tau.
+        self.assertEqual(measured_gravity_comp_force.shape, (len(expected_grav_comp_forces),))
+        np.testing.assert_allclose(-measured_gravity_comp_force, expected_grav_comp_forces, atol=1e-5, rtol=1e-5)
 
     def test_gravity_zero_without_gravity(self):
         """G(q) must vanish when the model has zero gravity."""
@@ -438,7 +446,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
             [[5.0, 6.0], [7.0, 8.0]],  # World1
         ]
 
-        expected_gravity_comp_forces = [
+        expected_grav_comp_forces = [
             0.0,  # World 0, fixed root, 1 dof
             0.0,  # World 0, floating root, 6+1 dofs
             0.0,
@@ -463,20 +471,33 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 [[I, I], [I, I]],  # World1, articulation0/articulation1, link0/link1
             ]
             for i in range(0, 2):
-                self._test_two_link_gravity_compensation_force(
-                    gravity_vec,
-                    joint_types[i],
-                    is_floating_base,
-                    joint_axis,
-                    joint_frames,
-                    joint_q,
-                    link_coms,
-                    link_masses,
-                    link_inertias,
-                    expected_gravity_comp_forces,
+                self._test_two_link_grav_comp_force(
+                    gravity_vec=gravity_vec,
+                    joint_type=joint_types[i],
+                    is_floating_base=is_floating_base,
+                    joint_axis=joint_axis,
+                    joint_frames=joint_frames,
+                    joint_q=joint_q,
+                    link_coms=link_coms,
+                    link_masses=link_masses,
+                    link_inertias=link_inertias,
+                    expected_grav_comp_forces=expected_grav_comp_forces,
                 )
 
     def test_two_link_prismatic_grav_comp_force_from_mass(self):
+        """A prismatic DOF aligned with gravity carries ``G(q) = m_distal * g``.
+
+        With gravity along -y and the internal prismatic axis along +y
+        (fully aligned), zero CoMs, identity joint frames, and zero
+        internal q, each articulation's internal DOF carries
+        ``m_distal * |g|`` — the parent link is reacted by either the
+        fixed root or the floating base and so contributes nothing on
+        the internal slider. Floating-root articulations additionally
+        carry ``M_total * |g|`` on the base linear-y entry; angular and
+        the other linear base entries are zero (no lever arm with zero
+        CoMs). The four articulations sweep distal masses 2, 4, 6, 8 to
+        confirm the slider entry scales linearly with ``m_distal``.
+        """
         gravity_vec = wp.vec3(0.0, -10.0, 0.0)
 
         is_floating_base = [
@@ -519,7 +540,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
             [[5.0, 6.0], [7.0, 8.0]],  # World1
         ]
 
-        expected_gravity_comp_forces = [
+        expected_grav_comp_forces = [
             20.0,  # World 0, fixed root, 1 dof
             0.0,  # World 0, floating root, 6+1 dofs
             70.0,
@@ -527,7 +548,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
             0.0,
             0.0,
             0.0,
-            40,
+            40.0,
             60.0,  # World 1, fixed root, 1 dof
             0.0,  # World 1, floating root, 6+1 dofs
             150.0,
@@ -535,7 +556,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
             0.0,
             0.0,
             0.0,
-            80,
+            80.0,
         ]
 
         for I in self.INERTIA_PASSES:
@@ -543,17 +564,17 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 [[I, I], [I, I]],
                 [[I, I], [I, I]],
             ]
-            self._test_two_link_gravity_compensation_force(
-                gravity_vec,
-                "prismatic",
-                is_floating_base,
-                joint_axis,
-                joint_frames,
-                joint_q,
-                link_coms,
-                link_masses,
-                link_inertias,
-                expected_gravity_comp_forces,
+            self._test_two_link_grav_comp_force(
+                gravity_vec=gravity_vec,
+                joint_type="prismatic",
+                is_floating_base=is_floating_base,
+                joint_axis=joint_axis,
+                joint_frames=joint_frames,
+                joint_q=joint_q,
+                link_coms=link_coms,
+                link_masses=link_masses,
+                link_inertias=link_inertias,
+                expected_grav_comp_forces=expected_grav_comp_forces,
             )
 
     def test_two_link_prismatic_grav_comp_force_from_rotated_root(self):
@@ -597,7 +618,9 @@ class TestGravCompForce(TestInverseDynamicsBase):
         # Build two per-articulation joint_q lists encoding +/- 90 deg
         # rotations about +Z, zero base position, and zero internal q.
         root_quat = wp.quat_from_axis_angle(wp.vec3(0.0, 0.0, 1.0), np.pi / 2.0)
-        floating_q_rot_z_90 = [0.0, 0.0, 0.0, root_quat.x, root_quat.y, root_quat.z, root_quat.w, 0.0]
+        floating_q_rot_z_90 = [
+            0.0, 0.0, 0.0, root_quat.x, root_quat.y, root_quat.z, root_quat.w, 0.0
+        ]
 
         root_quat_neg = wp.quat_from_axis_angle(wp.vec3(0.0, 0.0, 1.0), -np.pi / 2.0)
         floating_q_rot_z_neg90 = [
@@ -632,7 +655,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
         # rotation flips the slider to -Y and flips the sign for those rows.
         # World0 a1 and World1 a0 use floating_q_rot_z_neg90; the other two
         # use floating_q_rot_z_90.
-        expected_gravity_comp_forces = [
+        expected_grav_comp_forces = [
             0.0, 30.0, 0.0, 0.0, 0.0, 0.0, 20.0,    # W0 a0 [1, 2]: M=3, m_2=2  (+90 deg)
             0.0, 70.0, 0.0, 0.0, 0.0, 0.0, -40.0,   # W0 a1 [3, 4]: M=7, m_2=4  (-90 deg)
             0.0, 110.0, 0.0, 0.0, 0.0, 0.0, -60.0,  # W1 a0 [5, 6]: M=11, m_2=6 (-90 deg)
@@ -644,17 +667,17 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 [[I, I], [I, I]],
                 [[I, I], [I, I]],
             ]
-            self._test_two_link_gravity_compensation_force(
-                gravity_vec,
-                "prismatic",
-                is_floating_base,
-                joint_axis,
-                joint_frames,
-                joint_q,
-                link_coms,
-                link_masses,
-                link_inertias,
-                expected_gravity_comp_forces,
+            self._test_two_link_grav_comp_force(
+                gravity_vec=gravity_vec,
+                joint_type="prismatic",
+                is_floating_base=is_floating_base,
+                joint_axis=joint_axis,
+                joint_frames=joint_frames,
+                joint_q=joint_q,
+                link_coms=link_coms,
+                link_masses=link_masses,
+                link_inertias=link_inertias,
+                expected_grav_comp_forces=expected_grav_comp_forces,
             )
 
     def test_two_link_prismatic_grav_comp_force_from_rotated_joint_frame(self):
@@ -741,7 +764,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
         # prismatic = +/- m_2 * 10 (sign matches the joint-frame rotation).
         # For floating articulations: lin_y = M_total * 10 (total weight),
         # all other base entries = 0 (zero CoMs -> no lever arm).
-        expected_gravity_comp_forces = [
+        expected_grav_comp_forces = [
             20.0,                                   # W0 a0 [1, 2]: fixed,    +90 deg, m_2=2
             0.0, 70.0, 0.0, 0.0, 0.0, 0.0, -40.0,   # W0 a1 [3, 4]: floating, -90 deg, M=7, m_2=4
             -60.0,                                  # W1 a0 [5, 6]: fixed,    -90 deg, m_2=6
@@ -753,20 +776,34 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 [[I, I], [I, I]],
                 [[I, I], [I, I]],
             ]
-            self._test_two_link_gravity_compensation_force(
-                gravity_vec,
-                "prismatic",
-                is_floating_base,
-                joint_axis,
-                joint_frames,
-                joint_q,
-                link_coms,
-                link_masses,
-                link_inertias,
-                expected_gravity_comp_forces,
+            self._test_two_link_grav_comp_force(
+                gravity_vec=gravity_vec,
+                joint_type="prismatic",
+                is_floating_base=is_floating_base,
+                joint_axis=joint_axis,
+                joint_frames=joint_frames,
+                joint_q=joint_q,
+                link_coms=link_coms,
+                link_masses=link_masses,
+                link_inertias=link_inertias,
+                expected_grav_comp_forces=expected_grav_comp_forces,
             )
 
-    def test_two_link_prismatic_gravity_compensation_force_from_com(self):
+    def test_two_link_prismatic_grav_comp_force_from_com(self):
+        """Lateral CoM offsets produce angular-z entries on floating roots.
+
+        Same setup as
+        :meth:`test_two_link_prismatic_grav_comp_force_from_mass` —
+        prismatic +y axis aligned with -y gravity, identity joint frames,
+        zero internal q — but with non-zero per-link CoM offsets along
+        +x. The internal prismatic entry is unchanged (a transverse lever
+        arm doesn't project onto an axial slider DOF), and the linear-y
+        base entry on floating roots remains ``M_total * |g|``. Floating
+        roots additionally develop an angular-z entry equal to
+        ``sum_i m_i * x_i * |g|`` from the cross product
+        ``r_com x (0, -g, 0)``; angular x and y stay zero because the
+        CoM offsets have no y or z component.
+        """
         gravity_vec = wp.vec3(0.0, -10.0, 0.0)
 
         is_floating_base = [
@@ -809,15 +846,15 @@ class TestGravCompForce(TestInverseDynamicsBase):
             [[5.0, 6.0], [7.0, 8.0]],  # World1
         ]
 
-        expected_gravity_comp_forces = [
+        expected_grav_comp_forces = [
             20.0, # World 0, fixed root, 1 dof
             0.0,  # World 0, floating root, 6+1 dofs
             70.0,
             0.0,
             0.0,
             0.0,
-            15,
-            40,
+            15.0,
+            40.0,
             60.0, # World 1, fixed root, 1 dof
             0.0,  # World 1, floating root, 6+1 dofs
             150.0,
@@ -825,7 +862,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
             0.0,
             0.0,
             75.0,
-            80,
+            80.0,
         ]
 
         for I in self.INERTIA_PASSES:
@@ -833,17 +870,17 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 [[I, I], [I, I]],
                 [[I, I], [I, I]],
             ]
-            self._test_two_link_gravity_compensation_force(
-                gravity_vec,
-                "prismatic",
-                is_floating_base,
-                joint_axis,
-                joint_frames,
-                joint_q,
-                link_coms,
-                link_masses,
-                link_inertias,
-                expected_gravity_comp_forces,
+            self._test_two_link_grav_comp_force(
+                gravity_vec=gravity_vec,
+                joint_type="prismatic",
+                is_floating_base=is_floating_base,
+                joint_axis=joint_axis,
+                joint_frames=joint_frames,
+                joint_q=joint_q,
+                link_coms=link_coms,
+                link_masses=link_masses,
+                link_inertias=link_inertias,
+                expected_grav_comp_forces=expected_grav_comp_forces,
             )
 
     def test_two_link_prismatic_grav_comp_force_axis_perpendicular_to_gravity(self):
@@ -907,7 +944,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
         # Floating root: (v_x, v_y, v_z, omega_x, omega_y, omega_z, q_internal).
         #   Linear y = M_total * |g| = 3 * 10 = 30 (total weight).
         #   Angular and internal = 0 (both CoMs at root origin; axis perp to gravity).
-        expected_gravity_comp_forces = [
+        expected_grav_comp_forces = [
             0.0,  # World 0, fixed root, 1 dof (internal prismatic)
             0.0,  # World 0, floating root, 6+1 dofs
             30.0,
@@ -931,20 +968,20 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 [[I, I], [I, I]],
                 [[I, I], [I, I]],
             ]
-            self._test_two_link_gravity_compensation_force(
-                gravity_vec,
-                "prismatic",
-                is_floating_base,
-                joint_axis,
-                joint_frames,
-                joint_q,
-                link_coms,
-                link_masses,
-                link_inertias,
-                expected_gravity_comp_forces,
+            self._test_two_link_grav_comp_force(
+                gravity_vec=gravity_vec,
+                joint_type="prismatic",
+                is_floating_base=is_floating_base,
+                joint_axis=joint_axis,
+                joint_frames=joint_frames,
+                joint_q=joint_q,
+                link_coms=link_coms,
+                link_masses=link_masses,
+                link_inertias=link_inertias,
+                expected_grav_comp_forces=expected_grav_comp_forces,
             )
 
-    def test_two_link_revolute_gravity_compensation_force_from_jnt_frame(self):
+    def test_two_link_revolute_grav_comp_force_from_jnt_frame(self):
         gravity_vec = wp.vec3(0.0, -10.0, 0.0)
 
         is_floating_base = [
@@ -991,7 +1028,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
             [[1.0, 2.0], [1.0, 2.0]],  # World1
         ]
 
-        expected_gravity_comp_forces = [
+        expected_grav_comp_forces = [
             80.0,  # World 0, fixed root, 1 dof
             0.0,  # World 0, floating root, 6+1 dofs
             30.0,
@@ -1015,20 +1052,20 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 [[I, I], [I, I]],
                 [[I, I], [I, I]],
             ]
-            self._test_two_link_gravity_compensation_force(
-                gravity_vec,
-                "revolute",
-                is_floating_base,
-                joint_axis,
-                joint_frames,
-                joint_q,
-                link_coms,
-                link_masses,
-                link_inertias,
-                expected_gravity_comp_forces,
+            self._test_two_link_grav_comp_force(
+                gravity_vec=gravity_vec,
+                joint_type="revolute",
+                is_floating_base=is_floating_base,
+                joint_axis=joint_axis,
+                joint_frames=joint_frames,
+                joint_q=joint_q,
+                link_coms=link_coms,
+                link_masses=link_masses,
+                link_inertias=link_inertias,
+                expected_grav_comp_forces=expected_grav_comp_forces,
             )
 
-    def test_two_link_revolute_gravity_compensation_force_axis_parallel_to_gravity(self):
+    def test_two_link_revolute_grav_comp_force_axis_parallel_to_gravity(self):
         """A revolute DOF whose axis is parallel to gravity carries zero G(q).
 
         With gravity along -y and the internal revolute axis along +y, the
@@ -1090,7 +1127,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
         # Floating root: (v_x, v_y, v_z, omega_x, omega_y, omega_z, q_internal).
         #   Linear y = M_total * |g| = 3 * 10 = 30 (total weight).
         #   Angular and internal = 0 (both CoMs at root origin; axis ∥ gravity).
-        expected_gravity_comp_forces = [
+        expected_grav_comp_forces = [
             0.0,  # World 0, fixed root, 1 dof (internal revolute)
             0.0,  # World 0, floating root, 6+1 dofs
             30.0,
@@ -1114,38 +1151,40 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 [[I, I], [I, I]],
                 [[I, I], [I, I]],
             ]
-            self._test_two_link_gravity_compensation_force(
-                gravity_vec,
-                "revolute",
-                is_floating_base,
-                joint_axis,
-                joint_frames,
-                joint_q,
-                link_coms,
-                link_masses,
-                link_inertias,
-                expected_gravity_comp_forces,
+            self._test_two_link_grav_comp_force(
+                gravity_vec=gravity_vec,
+                joint_type="revolute",
+                is_floating_base=is_floating_base,
+                joint_axis=joint_axis,
+                joint_frames=joint_frames,
+                joint_q=joint_q,
+                link_coms=link_coms,
+                link_masses=link_masses,
+                link_inertias=link_inertias,
+                expected_grav_comp_forces=expected_grav_comp_forces,
             )
 
     def test_two_link_fixed_revolute_gravity_compensation_matches_closed_form(self):
-        """Internal revolute DOF matches the closed-form ``m * g * l * cos(q)``.
+        """Internal revolute DOF matches the closed-form ``m * g * arm_length * cos(q)``.
 
         Fixed-root arm, internal revolute about +z anchored at the world
-        origin. The child body's origin is placed at ``(l, 0, 0)`` by setting
-        the internal joint's ``child_xform`` to ``(-l, 0, 0)``; the distal
-        link's body-frame CoM is the origin, so link 1's world CoM at angle
-        ``q`` is ``(l cos q, l sin q, 0)``. Under gravity ``(0, -g, 0)`` the
-        Lagrangian generalized gravity force on the internal DOF reduces to
-        ``G(q) = m_distal * g * l * cos(q)``. Newton returns ``-G(q)`` with
-        the sign convention used elsewhere in this file, so we compare
-        ``-tau[0]`` against the closed form over a pose sweep.
+        origin. The child body's origin is placed at ``(arm_length, 0, 0)``
+        by setting the internal joint's ``child_xform`` to
+        ``(-arm_length, 0, 0)``; the distal link's body-frame CoM is the
+        origin, so link 1's world CoM at angle ``q`` is
+        ``(arm_length * cos q, arm_length * sin q, 0)``. Under gravity
+        ``(0, -g, 0)`` the Lagrangian generalized gravity force on the
+        internal DOF reduces to
+        ``G(q) = m_distal * g * arm_length * cos(q)``. Newton returns
+        ``-G(q)`` with the sign convention used elsewhere in this file, so
+        we compare ``-tau[0]`` against the closed form over a pose sweep.
         """
-        l = 1.0
+        arm_length = 1.0
         m_distal = 2.0
         g_mag = 10.0
 
         identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
-        child_anchor_back = wp.transform(wp.vec3(-l, 0.0, 0.0), wp.quat_identity())
+        child_anchor_back = wp.transform(wp.vec3(-arm_length, 0.0, 0.0), wp.quat_identity())
         for I in self.INERTIA_PASSES:
             builder = self._build_two_link_pendulum(
                 gravity=wp.vec3(0.0, -g_mag, 0.0),
@@ -1176,7 +1215,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 )
                 tau = inverse_dynamics.gravity_compensation_force.numpy()
 
-                expected = m_distal * g_mag * l * np.cos(q)
+                expected = m_distal * g_mag * arm_length * np.cos(q)
                 np.testing.assert_allclose(
                     -tau[0],
                     expected,
@@ -1202,10 +1241,7 @@ class TestCoriolisCompensationForce(TestInverseDynamicsBase):
                 wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
                 wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
             ],
-            link_inertias=[
-                wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
-                wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
-            ],
+            link_inertias=[self.I_UNIT, self.I_UNIT],
         )
         model = builder.finalize(device=self.device)
         state = self._pose_pendulum(model)
@@ -1239,10 +1275,7 @@ class TestMassMatrix(TestInverseDynamicsBase):
                 wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
                 wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
             ],
-            link_inertias=[
-                wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
-                wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
-            ],
+            link_inertias=[self.I_UNIT, self.I_UNIT],
         )
         model = builder.finalize(device=self.device)
         state = self._pose_pendulum(model)
