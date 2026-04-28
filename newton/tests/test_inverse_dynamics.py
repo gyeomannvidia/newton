@@ -188,6 +188,7 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
         joint_frames: list[list[list[wp.transform]]],
         expected_gravity_comp_forces: list[float],
         link_inertias: list[list[list[wp.mat33]]] | None = None,
+        joint_q: list[list[list[float] | None]] | None = None,
     ):
         """G(q) is populated correctly for a multi-world, multi-articulation model.
 
@@ -208,6 +209,16 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
                 ``[w][a][link]`` as ``wp.mat33``. Defaults to unit inertia
                 tensors, which is fine for gravity-compensation tests since
                 ``G(q)`` only reads mass and CoM.
+            joint_q: Optional per-articulation initial-state ``joint_q``
+                overrides ``[w][a]``. Each entry is either ``None`` (use the
+                default zero/identity ``model.state()`` initialization) or a
+                list of floats whose length matches the articulation's
+                ``joint_q`` size — 8 for a floating root with one internal
+                DOF (``(px, py, pz, qx, qy, qz, qw, q_internal)``) and 1 for
+                a fixed root with one internal DOF (``(q_internal,)``).
+                Applied before ``eval_fk`` so the rest pose / starting pose
+                used during gravity-compensation evaluation reflects the
+                override.
         """
         gravity_scalar, up_axis = _gravity_vec_to_scalar_and_axis(gravity_vec)
 
@@ -241,6 +252,30 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
 
         model = model_builder.finalize(device=self.device)
         state = model.state()
+
+        if joint_q is not None:
+            # Patch the per-articulation joint_q ranges in the global state
+            # vector. Articulations are appended in (world, articulation)
+            # iteration order by the build loop above, and within an
+            # articulation the root joint comes first, so the q layout is
+            # 7 free-joint values (px, py, pz, qx, qy, qz, qw) + 1 internal
+            # DOF for floating roots, or just 1 internal DOF for fixed roots.
+            joint_q_arr = state.joint_q.numpy()
+            offset = 0
+            for i in range(num_worlds):
+                for j in range(num_arts_per_world):
+                    art_q_size = 8 if is_floating_base[i][j] else 1
+                    override = joint_q[i][j]
+                    if override is not None:
+                        if len(override) != art_q_size:
+                            raise ValueError(
+                                f"joint_q[{i}][{j}] has length {len(override)}, "
+                                f"expected {art_q_size} for is_floating_base={is_floating_base[i][j]}."
+                            )
+                        joint_q_arr[offset : offset + art_q_size] = override
+                    offset += art_q_size
+            state.joint_q.assign(joint_q_arr)
+
         newton.eval_fk(model, state.joint_q, state.joint_qd, state)
         inverse_dynamics = model.inverse_dynamics()
 
@@ -264,6 +299,8 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
         )
 
         measured_gravity_comp_force = inverse_dynamics.gravity_compensation_force.numpy()
+        #print("measured_gravity_comp_force")
+        #print(measured_gravity_comp_force)
         self.assertTrue(np.all(np.isfinite(measured_gravity_comp_force)))
 
         # Newton's gravity_compensation_force returns G(q); the force the user
@@ -506,6 +543,238 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
                 80,
             ]
 
+            self._test_two_link_gravity_compensation_force(
+                gravity_vec,
+                "prismatic",
+                joint_axis,
+                is_floating_base,
+                link_coms,
+                link_masses,
+                joint_frames,
+                expected_gravity_comp_forces,
+                link_inertias=link_inertias,
+            )
+
+    def test_two_link_prismatic_gravity_compensation_force_from_rotated_root(self):
+        """Body +X slider + 90 deg root rotation about +Z is equivalent, on
+        the world-frame DOFs that exist in both setups, to a body +Y slider
+        with no rotation.
+
+        Every articulation here is floating-base so the rotation can be
+        applied through the free joint's quaternion in ``joint_q``; the
+        sibling :meth:`test_two_link_prismatic_gravity_compensation_force_from_mass`
+        runs the same physics with a body +Y slider and no rotation but
+        keeps World 0 / World 1 articulation 0 fixed-root, so its overall
+        ``G(q)`` layout is shorter (1 + 7 + 1 + 7 entries) than this test's
+        all-floating layout (4 x 7 entries). The two floating articulations
+        that exist in both tests (World 0 a1 and World 1 a1) have identical
+        expected values; the other two were fixed-root in ``_from_mass``
+        and are floating-root here, so their per-DOF entries are different
+        by construction.
+
+        With all CoMs zero, the per-articulation expected ``-G(q)`` is
+        ``(0, M_total * g, 0, 0, 0, 0, m_2 * g)``. Free-joint ``joint_q``
+        is written in Newton/Warp convention — quaternion in
+        ``(x, y, z, w)`` order — since ``state.joint_q`` is a Newton array.
+        Whatever solver Newton dispatches to internally is responsible for
+        translating to its own quaternion layout.
+        """
+        # 90 deg rotation about +Z + zero base position + zero internal q.
+        # joint_q layout: (px, py, pz, qx, qy, qz, qw, q_internal) — Warp's
+        # x-first quaternion convention as exposed by Newton.
+        root_quat = wp.quat_from_axis_angle(wp.vec3(0.0, 0.0, 1.0), np.pi / 2.0)
+
+        # Sanity check: the quaternion really maps body +X to world +Y.
+        rotated = wp.quat_rotate(root_quat, wp.vec3(1.0, 0.0, 0.0))
+        np.testing.assert_allclose(
+            [rotated[0], rotated[1], rotated[2]], [0.0, 1.0, 0.0], atol=1e-6
+        )
+
+        root_quat_neg = wp.quat_from_axis_angle(wp.vec3(0.0, 0.0, 1.0), -np.pi / 2.0)
+
+        floating_q_rot_z_90 = [0.0, 0.0, 0.0, root_quat.x, root_quat.y, root_quat.z, root_quat.w, 0.0]
+        floating_q_rot_z_neg90 = [
+            0.0, 0.0, 0.0, root_quat_neg.x, root_quat_neg.y, root_quat_neg.z, root_quat_neg.w, 0.0,
+        ]
+        joint_q = [
+            [floating_q_rot_z_90, floating_q_rot_z_neg90],  # World0: a0 = +90 deg, a1 = -90 deg
+            [floating_q_rot_z_neg90, floating_q_rot_z_90],  # World1: a0 = -90 deg, a1 = +90 deg
+        ]
+        is_floating_base = [
+            [True, True],  # World0, all floating so joint_q can rotate every root
+            [True, True],  # World1
+        ]
+        link_coms = [
+            [
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation0, link0/link1
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation1, link0/link1
+            ],
+            [
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation0, link0/link1
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation1, link0/link1
+            ],
+        ]
+        link_masses = [
+            [[1.0, 2.0], [3.0, 4.0]],  # World0
+            [[5.0, 6.0], [7.0, 8.0]],  # World1
+        ]
+
+        identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
+        joint_frames = [
+            [
+                [identity_xform, identity_xform],  # World0, articulation0, root/internal joint
+                [identity_xform, identity_xform],  # World0, articulation1, root/internal joint
+            ],
+            [
+                [identity_xform, identity_xform],  # World1, articulation0, root/internal joint
+                [identity_xform, identity_xform],  # World1, articulation1, root/internal joint
+            ],
+        ]
+
+        prismatic_x = wp.vec3(1.0, 0.0, 0.0)
+        joint_axis = [
+            [prismatic_x, prismatic_x],  # World0, articulation0/articulation1
+            [prismatic_x, prismatic_x],  # World1, articulation0/articulation1
+        ]
+
+        gravity_vec = wp.vec3(0.0, -10.0, 0.0)
+
+        # Per articulation: 6 base DOFs + 1 internal = 7 DOFs.
+        # lin_x = lin_z = 0 (gravity has no x/z component);
+        # lin_y = M_total * 10 (total weight);
+        # ang_xyz = 0 (zero CoMs -> no lever arm);
+        # prismatic = +/- m_2 * 10: +Y world-slider gives +m_2*10, the -90 deg
+        # rotation flips the slider to -Y and flips the sign for those rows.
+        # World0 a1 and World1 a0 use floating_q_rot_z_neg90; the other two
+        # use floating_q_rot_z_90.
+        expected_gravity_comp_forces = [
+            0.0, 30.0, 0.0, 0.0, 0.0, 0.0, 20.0,    # W0 a0 [1, 2]: M=3, m_2=2  (+90 deg)
+            0.0, 70.0, 0.0, 0.0, 0.0, 0.0, -40.0,   # W0 a1 [3, 4]: M=7, m_2=4  (-90 deg)
+            0.0, 110.0, 0.0, 0.0, 0.0, 0.0, -60.0,  # W1 a0 [5, 6]: M=11, m_2=6 (-90 deg)
+            0.0, 150.0, 0.0, 0.0, 0.0, 0.0, 80.0,   # W1 a1 [7, 8]: M=15, m_2=8 (+90 deg)
+        ]
+
+        for I in self.INERTIA_PASSES:
+            link_inertias = [
+                [[I, I], [I, I]],
+                [[I, I], [I, I]],
+            ]
+            self._test_two_link_gravity_compensation_force(
+                gravity_vec,
+                "prismatic",
+                joint_axis,
+                is_floating_base,
+                link_coms,
+                link_masses,
+                joint_frames,
+                expected_gravity_comp_forces,
+                link_inertias=link_inertias,
+                joint_q=joint_q,
+            )
+
+    def test_two_link_prismatic_gravity_compensation_force_from_rotated_joint_frame(self):
+        """Body +X slider with the internal joint frame rotated 90 deg about
+        +Z is equivalent, in world-frame physics, to a body +Y slider with no
+        rotation.
+
+        This sibling of
+        :meth:`test_two_link_prismatic_gravity_compensation_force_from_rotated_root`
+        achieves the world-frame slider direction by rotating the *internal
+        joint's parent_xform* by +/- 90 deg about +Z, instead of rotating
+        the floating root through ``joint_q``. The roots themselves stay at
+        identity orientation, and unlike the rotated-root variant we don't
+        need the roots to be free for the joint-frame rotation to take
+        effect — so this test mixes fixed and floating roots.
+
+        Per articulation, with zero CoMs:
+          - +90 deg joint-frame rotation maps body +X to world +Y, so the
+            prismatic-DOF entry is ``+m_2 * g``;
+          - -90 deg joint-frame rotation maps body +X to world -Y, so the
+            prismatic-DOF entry is ``-m_2 * g``.
+          - Floating-root articulations additionally carry the base linear-y
+            entry ``M_total * g``; angular and the other linear entries are
+            zero (no lever arm with zero CoMs).
+        """
+        identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
+
+        # Joint-frame quaternion: pi/2 rotation about +Z. After parent_xform
+        # is applied to the parent body's frame, the joint's local frame is
+        # rotated 90 deg about Z, so the joint axis (1, 0, 0) in local
+        # coords corresponds to (0, 1, 0) in the parent body frame — i.e.
+        # +Y in the world when the root is at identity.
+        joint_frame_quat = wp.quat_from_axis_angle(wp.vec3(0.0, 0.0, 1.0), np.pi / 2.0)
+        rotated = wp.quat_rotate(joint_frame_quat, wp.vec3(1.0, 0.0, 0.0))
+        np.testing.assert_allclose(
+            [rotated[0], rotated[1], rotated[2]], [0.0, 1.0, 0.0], atol=1e-6
+        )
+        parent_xform_rot_z_90 = wp.transform(wp.vec3(0.0, 0.0, 0.0), joint_frame_quat)
+
+        # Counter-rotated joint frame: -pi/2 about +Z maps body +X to world -Y.
+        joint_frame_quat_neg = wp.quat_from_axis_angle(wp.vec3(0.0, 0.0, 1.0), -np.pi / 2.0)
+        rotated_neg = wp.quat_rotate(joint_frame_quat_neg, wp.vec3(1.0, 0.0, 0.0))
+        np.testing.assert_allclose(
+            [rotated_neg[0], rotated_neg[1], rotated_neg[2]], [0.0, -1.0, 0.0], atol=1e-6
+        )
+        parent_xform_rot_z_neg90 = wp.transform(wp.vec3(0.0, 0.0, 0.0), joint_frame_quat_neg)
+
+        is_floating_base = [
+            [False, True],  # World0, articulation0 fixed, articulation1 free
+            [False, True],  # World1, articulation0 fixed, articulation1 free
+        ]
+        link_coms = [
+            [
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation0, link0/link1
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation1, link0/link1
+            ],
+            [
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation0, link0/link1
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation1, link0/link1
+            ],
+        ]
+        link_masses = [
+            [[1.0, 2.0], [3.0, 4.0]],  # World0
+            [[5.0, 6.0], [7.0, 8.0]],  # World1
+        ]
+
+        # joint_frames[w][a] = [parent_xform_internal, child_xform_internal].
+        # +90 deg parent_xform maps body +X to world +Y; -90 deg maps body
+        # +X to world -Y, used here on World0 a1 and World1 a0.
+        joint_frames = [
+            [
+                [parent_xform_rot_z_90, identity_xform],     # World0, articulation0 (+90 deg)
+                [parent_xform_rot_z_neg90, identity_xform],  # World0, articulation1 (-90 deg)
+            ],
+            [
+                [parent_xform_rot_z_neg90, identity_xform],  # World1, articulation0 (-90 deg)
+                [parent_xform_rot_z_90, identity_xform],     # World1, articulation1 (+90 deg)
+            ],
+        ]
+
+        prismatic_x = wp.vec3(1.0, 0.0, 0.0)
+        joint_axis = [
+            [prismatic_x, prismatic_x],  # World0, articulation0/articulation1
+            [prismatic_x, prismatic_x],  # World1, articulation0/articulation1
+        ]
+
+        gravity_vec = wp.vec3(0.0, -10.0, 0.0)
+
+        # Fixed root: 1 DOF (internal prismatic only).
+        # Floating root: 6 base DOFs + 1 internal = 7 DOFs.
+        # prismatic = +/- m_2 * 10 (sign matches the joint-frame rotation).
+        # For floating articulations: lin_y = M_total * 10 (total weight),
+        # all other base entries = 0 (zero CoMs -> no lever arm).
+        expected_gravity_comp_forces = [
+            20.0,                                   # W0 a0 [1, 2]: fixed,    +90 deg, m_2=2
+            0.0, 70.0, 0.0, 0.0, 0.0, 0.0, -40.0,   # W0 a1 [3, 4]: floating, -90 deg, M=7, m_2=4
+            -60.0,                                  # W1 a0 [5, 6]: fixed,    -90 deg, m_2=6
+            0.0, 150.0, 0.0, 0.0, 0.0, 0.0, 80.0,   # W1 a1 [7, 8]: floating, +90 deg, M=15, m_2=8
+        ]
+
+        for I in self.INERTIA_PASSES:
+            link_inertias = [
+                [[I, I], [I, I]],
+                [[I, I], [I, I]],
+            ]
             self._test_two_link_gravity_compensation_force(
                 gravity_vec,
                 "prismatic",
