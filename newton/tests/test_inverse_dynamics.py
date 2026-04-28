@@ -177,9 +177,9 @@ class TestGravCompForce(TestInverseDynamicsBase):
     @staticmethod
     def _default_joint_q(is_floating_base: list[list[bool]]) -> list[list[list[float]]]:
         """Build the default initial-state ``joint_q`` for a multi-world,
-        multi-articulation pendulum: zero position, identity quaternion (in
-        ``(qx, qy, qz, qw)`` order with ``qw = 1``), zero internal q for each
-        floating articulation; a single zero internal q for each fixed one.
+        multi-articulation pendulum: zero position, identity quaternion,
+        zero internal q for each floating articulation; a single zero
+        internal q for each fixed one.
         """
         default_floating = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0]
         default_fixed = [0.0]
@@ -212,16 +212,17 @@ class TestGravCompForce(TestInverseDynamicsBase):
             joint_frames: Per-joint parent-side anchor transforms ``[w][a][joint]``.
                 ``joint[0]`` is the root joint (free or fixed), ``joint[1]`` is
                 the internal DOF joint.
-            joint_q: Per-articulation initial-state ``joint_q`` overrides
-                shaped ``[w][a]``. Each inner list is a list of floats whose
-                length matches the articulation's ``joint_q`` size — 8 for a
-                floating root with one internal DOF
-                (``(px, py, pz, qx, qy, qz, qw, q_internal)``) and 1 for a
-                fixed root with one internal DOF (``(q_internal,)``). Applied
-                before ``eval_fk`` so the rest pose / starting pose used
-                during gravity-compensation evaluation reflects the override.
-                Use :meth:`_default_joint_q` to build the zero-pose / identity-
-                quat default when the test doesn't care about the rest pose.
+            joint_q: Per-articulation initial-state ``joint_q`` shaped
+                ``[w][a]``. Each inner list holds the per-articulation
+                generalized coordinates: 8 floats for a floating root with
+                one internal DOF (3 base position, 4 base quaternion, 1
+                internal q) and 1 float for a fixed root with one internal
+                DOF (``(q_internal,)``). Written into ``state.joint_q``
+                before ``eval_fk`` so the rest pose used during
+                gravity-compensation evaluation reflects this input. Use
+                :meth:`_default_joint_q` to build the zero-pose /
+                identity-quat default when the test doesn't care about the
+                rest pose.
             link_coms: Per-link CoM offsets ``[w][a][link]`` as ``wp.vec3``.
             link_masses: Per-link masses ``[w][a][link]``.
             link_inertias: Per-link body-frame inertia tensors
@@ -264,9 +265,9 @@ class TestGravCompForce(TestInverseDynamicsBase):
         # Patch the per-articulation joint_q ranges in the global state
         # vector. Articulations are appended in (world, articulation) iteration
         # order by the build loop above, and within an articulation the root
-        # joint comes first, so the q layout is 7 free-joint values
-        # (px, py, pz, qx, qy, qz, qw) + 1 internal DOF for floating roots, or
-        # just 1 internal DOF for fixed roots.
+        # joint comes first, so the q layout is 7 free-joint values (3 base
+        # position + 4 base quaternion) + 1 internal DOF for floating roots,
+        # or just 1 internal DOF for fixed roots.
         joint_q_arr = state.joint_q.numpy()
         offset = 0
         for i in range(num_worlds):
@@ -285,18 +286,6 @@ class TestGravCompForce(TestInverseDynamicsBase):
         newton.eval_fk(model, state.joint_q, state.joint_qd, state)
         inverse_dynamics = model.inverse_dynamics()
 
-        # Instantiate SolverMuJoCo so its custom-attribute registrations
-        # (eq_solref / eq_solimp / actuator knobs, etc.) round-trip into the
-        # finalized model, then advance one simulation step so the solver
-        # builds its internal mjw_model / mjw_data.#
-        # solver = newton.solvers.SolverMuJoCo(model)
-        # state_next = model.state()
-        # control = model.control()
-        # solver.step(state, state_next, control, None, 1.0 / 60.0)
-        # mujoco_tau = solver.mj_data.qfrc_bias.copy()
-        # print("mujoco tau")
-        # print(mujoco_tau)
-
         newton.eval_inverse_dynamics(
             model=model,
             state=state,
@@ -305,8 +294,6 @@ class TestGravCompForce(TestInverseDynamicsBase):
         )
 
         measured_gravity_comp_force = inverse_dynamics.gravity_compensation_force.numpy()
-        #print("measured_gravity_comp_force")
-        #print(measured_gravity_comp_force)
         self.assertTrue(np.all(np.isfinite(measured_gravity_comp_force)))
 
         # Newton's gravity_compensation_force returns G(q); the force the user
@@ -391,9 +378,9 @@ class TestGravCompForce(TestInverseDynamicsBase):
         axes. With gravity set to the zero vector, the generalized gravity
         force must be identically zero on every DOF, independent of joint
         type, joint axis, root type, link mass, CoM offset, or link inertia
-        tensor. The outer loop runs once with unit inertias (the harness
-        default) and once with inertias scaled by 100 to confirm G(q) is
-        truly insensitive to the inertia tensor.
+        tensor. The outer loop runs once with unit inertias and once with
+        inertias scaled by 100 to confirm G(q) is truly insensitive to the
+        inertia tensor.
         """
         joint_types = ["revolute", "prismatic"]
 
@@ -415,8 +402,8 @@ class TestGravCompForce(TestInverseDynamicsBase):
         # Non-identity anchors on the internal joint — under zero gravity
         # G(q) must still be identically zero, independent of where the
         # joint is anchored in the parent/child bodies or how either frame
-        # is oriented. Quaternions are (x, y, z, w); the values below
-        # encode 45 deg about +z and 60 deg about +y.
+        # is oriented. The hand-written quaternion values below encode
+        # 45 deg about +z and 60 deg about +y.
         identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
         shift_x = wp.transform(wp.vec3(0.5, 0.0, 0.0), wp.quat_identity())
         shift_ny = wp.transform(wp.vec3(0.0, -0.3, 0.0), wp.quat_identity())
@@ -570,28 +557,17 @@ class TestGravCompForce(TestInverseDynamicsBase):
             )
 
     def test_two_link_prismatic_grav_comp_force_from_rotated_root(self):
-        """Body +X slider + 90 deg root rotation about +Z is equivalent, on
-        the world-frame DOFs that exist in both setups, to a body +Y slider
-        with no rotation.
+        """Body +X slider + per-articulation +/- 90 deg root rotation about
+        +Z, applied through the free joint's quaternion in ``joint_q``.
 
-        Every articulation here is floating-base so the rotation can be
-        applied through the free joint's quaternion in ``joint_q``; the
-        sibling :meth:`test_two_link_prismatic_grav_comp_force_from_mass`
-        runs the same physics with a body +Y slider and no rotation but
-        keeps World 0 / World 1 articulation 0 fixed-root, so its overall
-        ``G(q)`` layout is shorter (1 + 7 + 1 + 7 entries) than this test's
-        all-floating layout (4 x 7 entries). The two floating articulations
-        that exist in both tests (World 0 a1 and World 1 a1) have identical
-        expected values; the other two were fixed-root in ``_from_mass``
-        and are floating-root here, so their per-DOF entries are different
-        by construction.
-
-        With all CoMs zero, the per-articulation expected ``-G(q)`` is
-        ``(0, M_total * g, 0, 0, 0, 0, m_2 * g)``. Free-joint ``joint_q``
-        is written in Newton/Warp convention — quaternion in
-        ``(x, y, z, w)`` order — since ``state.joint_q`` is a Newton array.
-        Whatever solver Newton dispatches to internally is responsible for
-        translating to its own quaternion layout.
+        Every articulation here is floating-base so the rotation can live in
+        ``joint_q``. World 0 a0 and World 1 a1 use a +90 deg rotation
+        (body +X maps to world +Y, prismatic-DOF entry of ``-G(q)`` is
+        ``+m_2 * g``); World 0 a1 and World 1 a0 use a -90 deg rotation
+        (body +X maps to world -Y, prismatic-DOF entry is ``-m_2 * g``).
+        With all CoMs zero the per-articulation expected ``-G(q)`` is
+        ``(0, M_total * g, 0, 0, 0, 0, +/- m_2 * g)``, with the prismatic
+        sign matching the sign of the rotation.
         """
         gravity_vec = wp.vec3(0.0, -10.0, 0.0)
 
@@ -618,9 +594,8 @@ class TestGravCompForce(TestInverseDynamicsBase):
             ],
         ]
 
-        # 90 deg rotation about +Z + zero base position + zero internal q.
-        # joint_q layout: (px, py, pz, qx, qy, qz, qw, q_internal) — Warp's
-        # x-first quaternion convention as exposed by Newton.
+        # Build two per-articulation joint_q lists encoding +/- 90 deg
+        # rotations about +Z, zero base position, and zero internal q.
         root_quat = wp.quat_from_axis_angle(wp.vec3(0.0, 0.0, 1.0), np.pi / 2.0)
         floating_q_rot_z_90 = [0.0, 0.0, 0.0, root_quat.x, root_quat.y, root_quat.z, root_quat.w, 0.0]
 
@@ -683,15 +658,13 @@ class TestGravCompForce(TestInverseDynamicsBase):
             )
 
     def test_two_link_prismatic_grav_comp_force_from_rotated_joint_frame(self):
-        """Body +X slider with the internal joint frame rotated 90 deg about
-        +Z is equivalent, in world-frame physics, to a body +Y slider with no
-        rotation.
+        """Body +X slider with per-articulation +/- 90 deg rotation of the
+        internal joint frame about +Z, instead of rotating the floating root.
 
         This sibling of
         :meth:`test_two_link_prismatic_grav_comp_force_from_rotated_root`
         achieves the world-frame slider direction by rotating the *internal
-        joint's parent_xform* by +/- 90 deg about +Z, instead of rotating
-        the floating root through ``joint_q``. The roots themselves stay at
+        joint's ``parent_xform``* about +Z. The roots themselves stay at
         identity orientation, and unlike the rotated-root variant we don't
         need the roots to be free for the joint-frame rotation to take
         effect — so this test mixes fixed and floating roots.
@@ -1020,7 +993,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
 
         expected_gravity_comp_forces = [
             80.0,  # World 0, fixed root, 1 dof
-            0.0,  # World 0, fjux root, 6+1 dofs
+            0.0,  # World 0, floating root, 6+1 dofs
             30.0,
             0.0,
             0.0,
