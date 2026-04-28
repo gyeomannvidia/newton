@@ -166,7 +166,7 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         self.assertGreater(float(np.linalg.norm(c)), 1e-6)
 
 
-class TestGravityCompensationForce(TestInverseDynamicsBase):
+class TestGravCompForce(TestInverseDynamicsBase):
     """Gravity-compensation-force tests for the two-link pendulum harness."""
 
     # Per-link inertia tensors swept by every test in this class to confirm
@@ -376,7 +376,7 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
             tau = inverse_dynamics.gravity_compensation_force.numpy()
             self.assertGreater(float(np.linalg.norm(tau)), 1e-6)
 
-    def test_two_link_gravity_compensation_force_from_zero_gravity(self):
+    def test_two_link_grav_comp_force_from_zero_gravity(self):
         """G(q) vanishes everywhere when the model has zero gravity.
 
         Builds a multi-world, multi-articulation pendulum (2 worlds x 2
@@ -391,82 +391,82 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
         """
         joint_types = ["revolute", "prismatic"]
 
+        is_floating_base = [
+            [False, True],  # World0, articulation0 fixed, articulation1 free
+            [False, True],  # World1, articulation0 fixed, articulation1 free
+        ]
+        link_coms = [
+            [
+                [wp.vec3(1.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 1.0)],  # World0, articulation0, link0/link1
+                [wp.vec3(0.0, -2.0, 0.0), wp.vec3(0.0, 1.0, 0.0)],  # World0, articulation1, link0/link1
+            ],
+            [
+                [wp.vec3(2.0, 0.0, 0.0), wp.vec3(0.0, -1.0, 0.0)],  # World1, articulation0, link0/link1
+                [wp.vec3(0.0, 0.0, 1.0), wp.vec3(0.0, 3.0, 0.0)],  # World1, articulation1, link0/link1
+            ],
+        ]
+        link_masses = [
+            [[1.0, 2.0], [3.0, 4.0]],  # World0,
+            [[5.0, 6.0], [7.0, 8.0]],  # World1
+        ]
+
+        # Non-identity anchors on the internal joint — under zero gravity
+        # G(q) must still be identically zero, independent of where the
+        # joint is anchored in the parent/child bodies or how either frame
+        # is oriented. Quaternions are (x, y, z, w); the values below
+        # encode 45 deg about +z and 60 deg about +y.
+        identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
+        shift_x = wp.transform(wp.vec3(0.5, 0.0, 0.0), wp.quat_identity())
+        shift_ny = wp.transform(wp.vec3(0.0, -0.3, 0.0), wp.quat_identity())
+        shift_z = wp.transform(wp.vec3(0.0, 0.0, 0.7), wp.quat_identity())
+        rot_z_45 = wp.transform(wp.vec3(0.1, 0.2, 0.0), wp.quat(0.0, 0.0, 0.3826834, 0.9238795))
+        rot_y_60 = wp.transform(wp.vec3(0.0, 0.0, -0.4), wp.quat(0.0, 0.5, 0.0, 0.8660254))
+        joint_frames = [
+            [
+                [shift_x, identity_xform],  # World0, articulation0, internal joint parent/child xforms
+                [shift_ny, rot_y_60],  # World0, articulation1, internal joint parent/child xforms
+            ],
+            [
+                [rot_z_45, shift_z],  # World1, articulation0, internal joint parent/child xforms
+                [shift_x, rot_z_45],  # World1, articulation1, internal joint parent/child xforms
+            ],
+        ]
+
+        prismatic_x = wp.vec3(1.0, 0.0, 0.0)
+        prismatic_y = wp.vec3(0.0, 1.0, 0.0)
+        prismatic_z = wp.vec3(0.0, 0.0, 1.0)
+        joint_axis = [
+            [prismatic_x, prismatic_y],  # World0, articulation0/articulation1
+            [prismatic_z, prismatic_x],  # World1, articulation0/articulation1
+        ]
+
+        gravity_vec = wp.vec3(0.0, 0.0, 0.0)
+
+        expected_gravity_comp_forces = [
+            0.0,  # World 0, fixed root, 1 dof
+            0.0,  # World 0, floating root, 6+1 dofs
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,  # World 1, fixed root, 1 dof
+            0.0,  # World 1, floating root, 6+1 dofs
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ]
+
         for I in self.INERTIA_PASSES:
             link_inertias = [
                 [[I, I], [I, I]],  # World0, articulation0/articulation1, link0/link1
                 [[I, I], [I, I]],  # World1, articulation0/articulation1, link0/link1
             ]
             for i in range(0, 2):
-                is_floating_base = [
-                    [False, True],  # World0, articulation0 fixed, articulation1 free
-                    [False, True],  # World1, articulation0 fixed, articulation1 free
-                ]
-                link_coms = [
-                    [
-                        [wp.vec3(1.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 1.0)],  # World0, articulation0, link0/link1
-                        [wp.vec3(0.0, -2.0, 0.0), wp.vec3(0.0, 1.0, 0.0)],  # World0, articulation1, link0/link1
-                    ],
-                    [
-                        [wp.vec3(2.0, 0.0, 0.0), wp.vec3(0.0, -1.0, 0.0)],  # World1, articulation0, link0/link1
-                        [wp.vec3(0.0, 0.0, 1.0), wp.vec3(0.0, 3.0, 0.0)],  # World1, articulation1, link0/link1
-                    ],
-                ]
-                link_masses = [
-                    [[1.0, 2.0], [3.0, 4.0]],  # World0,
-                    [[5.0, 6.0], [7.0, 8.0]],  # World1
-                ]
-
-                # Non-identity anchors on the internal joint — under zero gravity
-                # G(q) must still be identically zero, independent of where the
-                # joint is anchored in the parent/child bodies or how either frame
-                # is oriented. Quaternions are (x, y, z, w); the values below
-                # encode 45 deg about +z and 60 deg about +y.
-                identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
-                shift_x = wp.transform(wp.vec3(0.5, 0.0, 0.0), wp.quat_identity())
-                shift_ny = wp.transform(wp.vec3(0.0, -0.3, 0.0), wp.quat_identity())
-                shift_z = wp.transform(wp.vec3(0.0, 0.0, 0.7), wp.quat_identity())
-                rot_z_45 = wp.transform(wp.vec3(0.1, 0.2, 0.0), wp.quat(0.0, 0.0, 0.3826834, 0.9238795))
-                rot_y_60 = wp.transform(wp.vec3(0.0, 0.0, -0.4), wp.quat(0.0, 0.5, 0.0, 0.8660254))
-                joint_frames = [
-                    [
-                        [shift_x, identity_xform],  # World0, articulation0, internal joint parent/child xforms
-                        [shift_ny, rot_y_60],  # World0, articulation1, internal joint parent/child xforms
-                    ],
-                    [
-                        [rot_z_45, shift_z],  # World1, articulation0, internal joint parent/child xforms
-                        [shift_x, rot_z_45],  # World1, articulation1, internal joint parent/child xforms
-                    ],
-                ]
-
-                prismatic_x = wp.vec3(1.0, 0.0, 0.0)
-                prismatic_y = wp.vec3(0.0, 1.0, 0.0)
-                prismatic_z = wp.vec3(0.0, 0.0, 1.0)
-                joint_axis = [
-                    [prismatic_x, prismatic_y],  # World0, articulation0/articulation1
-                    [prismatic_z, prismatic_x],  # World1, articulation0/articulation1
-                ]
-
-                gravity_vec = wp.vec3(0.0, 0.0, 0.0)
-
-                expected_gravity_comp_forces = [
-                    0.0,  # World 0, fixed root, 1 dof
-                    0.0,  # World 0, floating root, 6+1 dofs
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,  # World 1, fixed root, 1 dof
-                    0.0,  # World 1, floating root, 6+1 dofs
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                ]
-
                 self._test_two_link_gravity_compensation_force(
                     gravity_vec,
                     joint_types[i],
@@ -479,70 +479,70 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
                     link_inertias=link_inertias,
                 )
 
-    def test_two_link_prismatic_gravity_compensation_force_from_mass(self):
+    def test_two_link_prismatic_grav_comp_force_from_mass(self):
+        is_floating_base = [
+            [False, True],  # World0, articulation0 fixed, articulation1 free
+            [False, True],  # World1, articulation0 fixed, articulation1 free
+        ]
+        link_coms = [
+            [
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation0, link0/link1
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation1, link0/link1
+            ],
+            [
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation0, link0/link1
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation1, link0/link1
+            ],
+        ]
+        link_masses = [
+            [[1.0, 2.0], [3.0, 4.0]],  # World0,
+            [[5.0, 6.0], [7.0, 8.0]],  # World1
+        ]
+
+        identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
+        joint_frames = [
+            [
+                [identity_xform, identity_xform],  # World0, articulation0, root/internal joint
+                [identity_xform, identity_xform],  # World0, articulation1, root/internal joint
+            ],
+            [
+                [identity_xform, identity_xform],  # World1, articulation0, root/internal joint
+                [identity_xform, identity_xform],  # World1, articulation1, root/internal joint
+            ],
+        ]
+
+        prismatic_y = wp.vec3(0.0, 1.0, 0.0)
+        joint_axis = [
+            [prismatic_y, prismatic_y],  # World0, articulation0/articulation1
+            [prismatic_y, prismatic_y],  # World1, articulation0/articulation1
+        ]
+
+        gravity_vec = wp.vec3(0.0, -10.0, 0.0)
+
+        expected_gravity_comp_forces = [
+            20.0,  # World 0, fixed root, 1 dof
+            0.0,  # World 0, floating root, 6+1 dofs
+            70.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            40,
+            60.0,  # World 1, fixed root, 1 dof
+            0.0,  # World 1, floating root, 6+1 dofs
+            150.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            80,
+        ]
+
         for I in self.INERTIA_PASSES:
             link_inertias = [
                 [[I, I], [I, I]],
                 [[I, I], [I, I]],
             ]
-            is_floating_base = [
-                [False, True],  # World0, articulation0 fixed, articulation1 free
-                [False, True],  # World1, articulation0 fixed, articulation1 free
-            ]
-            link_coms = [
-                [
-                    [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation0, link0/link1
-                    [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation1, link0/link1
-                ],
-                [
-                    [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation0, link0/link1
-                    [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation1, link0/link1
-                ],
-            ]
-            link_masses = [
-                [[1.0, 2.0], [3.0, 4.0]],  # World0,
-                [[5.0, 6.0], [7.0, 8.0]],  # World1
-            ]
-
-            identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
-            joint_frames = [
-                [
-                    [identity_xform, identity_xform],  # World0, articulation0, root/internal joint
-                    [identity_xform, identity_xform],  # World0, articulation1, root/internal joint
-                ],
-                [
-                    [identity_xform, identity_xform],  # World1, articulation0, root/internal joint
-                    [identity_xform, identity_xform],  # World1, articulation1, root/internal joint
-                ],
-            ]
-
-            prismatic_y = wp.vec3(0.0, 1.0, 0.0)
-            joint_axis = [
-                [prismatic_y, prismatic_y],  # World0, articulation0/articulation1
-                [prismatic_y, prismatic_y],  # World1, articulation0/articulation1
-            ]
-
-            gravity_vec = wp.vec3(0.0, -10.0, 0.0)
-
-            expected_gravity_comp_forces = [
-                20.0,  # World 0, fixed root, 1 dof
-                0.0,  # World 0, floating root, 6+1 dofs
-                70.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                40,
-                60.0,  # World 1, fixed root, 1 dof
-                0.0,  # World 1, floating root, 6+1 dofs
-                150.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                80,
-            ]
-
             self._test_two_link_gravity_compensation_force(
                 gravity_vec,
                 "prismatic",
@@ -555,14 +555,14 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
                 link_inertias=link_inertias,
             )
 
-    def test_two_link_prismatic_gravity_compensation_force_from_rotated_root(self):
+    def test_two_link_prismatic_grav_comp_force_from_rotated_root(self):
         """Body +X slider + 90 deg root rotation about +Z is equivalent, on
         the world-frame DOFs that exist in both setups, to a body +Y slider
         with no rotation.
 
         Every articulation here is floating-base so the rotation can be
         applied through the free joint's quaternion in ``joint_q``; the
-        sibling :meth:`test_two_link_prismatic_gravity_compensation_force_from_mass`
+        sibling :meth:`test_two_link_prismatic_grav_comp_force_from_mass`
         runs the same physics with a body +Y slider and no rotation but
         keeps World 0 / World 1 articulation 0 fixed-root, so its overall
         ``G(q)`` layout is shorter (1 + 7 + 1 + 7 entries) than this test's
@@ -672,13 +672,13 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
                 joint_q=joint_q,
             )
 
-    def test_two_link_prismatic_gravity_compensation_force_from_rotated_joint_frame(self):
+    def test_two_link_prismatic_grav_comp_force_from_rotated_joint_frame(self):
         """Body +X slider with the internal joint frame rotated 90 deg about
         +Z is equivalent, in world-frame physics, to a body +Y slider with no
         rotation.
 
         This sibling of
-        :meth:`test_two_link_prismatic_gravity_compensation_force_from_rotated_root`
+        :meth:`test_two_link_prismatic_grav_comp_force_from_rotated_root`
         achieves the world-frame slider direction by rotating the *internal
         joint's parent_xform* by +/- 90 deg about +Z, instead of rotating
         the floating root through ``joint_q``. The roots themselves stay at
@@ -788,69 +788,69 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
             )
 
     def test_two_link_prismatic_gravity_compensation_force_from_com(self):
+        is_floating_base = [
+            [False, True],  # World0, articulation0 fixed, articulation1 free
+            [False, True],  # World1, articulation0 fixed, articulation1 free
+        ]
+        link_coms = [
+            [
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation0, link0/link1
+                [wp.vec3(0.5, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation1, link0/link1
+            ],
+            [
+                [wp.vec3(0.5, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation0, link0/link1
+                [wp.vec3(0.5, 0.0, 0.0), wp.vec3(0.5, 0.0, 0.0)],  # World1, articulation1, link0/link1
+            ],
+        ]
+        link_masses = [
+            [[1.0, 2.0], [3.0, 4.0]],  # World0,
+            [[5.0, 6.0], [7.0, 8.0]],  # World1
+        ]
+
+        identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
+        joint_frames = [
+            [
+                [identity_xform, identity_xform],  # World0, articulation0, root/internal joint
+                [identity_xform, identity_xform],  # World0, articulation1, root/internal joint
+            ],
+            [
+                [identity_xform, identity_xform],  # World1, articulation0, root/internal joint
+                [identity_xform, identity_xform],  # World1, articulation1, root/internal joint
+            ],
+        ]
+
+        prismatic_y = wp.vec3(0.0, 1.0, 0.0)
+        joint_axis = [
+            [prismatic_y, prismatic_y],  # World0, articulation0/articulation1
+            [prismatic_y, prismatic_y],  # World1, articulation0/articulation1
+        ]
+
+        gravity_vec = wp.vec3(0.0, -10.0, 0.0)
+
+        expected_gravity_comp_forces = [
+            20.0,  # World 0, fixed root, 1 dof
+            0.0,  # World 0, floating root, 6+1 dofs
+            70.0,
+            0.0,
+            0.0,
+            0.0,
+            15,
+            40,
+            60.0,  # World 1, fixed root, 1 dof
+            0.0,  # World 1, floating root, 6+1 dofs
+            150.0,
+            0.0,
+            0.0,
+            0.0,
+            75.0,
+            80,
+        ]
+
         for I in self.INERTIA_PASSES:
             link_inertias = [
                 [[I, I], [I, I]],
                 [[I, I], [I, I]],
             ]
-            is_floating_base = [
-                [False, True],  # World0, articulation0 fixed, articulation1 free
-                [False, True],  # World1, articulation0 fixed, articulation1 free
-            ]
-            link_coms = [
-                [
-                    [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation0, link0/link1
-                    [wp.vec3(0.5, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation1, link0/link1
-                ],
-                [
-                    [wp.vec3(0.5, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation0, link0/link1
-                    [wp.vec3(0.5, 0.0, 0.0), wp.vec3(0.5, 0.0, 0.0)],  # World1, articulation1, link0/link1
-                ],
-            ]
-            link_masses = [
-                [[1.0, 2.0], [3.0, 4.0]],  # World0,
-                [[5.0, 6.0], [7.0, 8.0]],  # World1
-            ]
-
-            identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
-            joint_frames = [
-                [
-                    [identity_xform, identity_xform],  # World0, articulation0, root/internal joint
-                    [identity_xform, identity_xform],  # World0, articulation1, root/internal joint
-                ],
-                [
-                    [identity_xform, identity_xform],  # World1, articulation0, root/internal joint
-                    [identity_xform, identity_xform],  # World1, articulation1, root/internal joint
-                ],
-            ]
-
-            prismatic_y = wp.vec3(0.0, 1.0, 0.0)
-            joint_axis = [
-                [prismatic_y, prismatic_y],  # World0, articulation0/articulation1
-                [prismatic_y, prismatic_y],  # World1, articulation0/articulation1
-            ]
-
-            gravity_vec = wp.vec3(0.0, -10.0, 0.0)
-
-            expected_gravity_comp_forces = [
-                20.0,  # World 0, fixed root, 1 dof
-                0.0,  # World 0, floating root, 6+1 dofs
-                70.0,
-                0.0,
-                0.0,
-                0.0,
-                15,
-                40,
-                60.0,  # World 1, fixed root, 1 dof
-                0.0,  # World 1, floating root, 6+1 dofs
-                150.0,
-                0.0,
-                0.0,
-                0.0,
-                75.0,
-                80,
-            ]
-
             self._test_two_link_gravity_compensation_force(
                 gravity_vec,
                 "prismatic",
@@ -863,7 +863,7 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
                 link_inertias=link_inertias,
             )
 
-    def test_two_link_prismatic_gravity_compensation_force_axis_perpendicular_to_gravity(self):
+    def test_two_link_prismatic_grav_comp_force_axis_perpendicular_to_gravity(self):
         """A prismatic DOF whose axis is perpendicular to gravity carries zero G(q).
 
         With gravity along -y and the internal prismatic axis along +x, the
@@ -874,77 +874,77 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
         base's linear-y entry still picks up the total weight, which acts as
         a sanity check that gravity is actually being applied.
         """
+        is_floating_base = [
+            [False, True],  # World0, articulation0 fixed, articulation1 free
+            [False, True],  # World1, articulation0 fixed, articulation1 free
+        ]
+        # Zero CoMs and identity joint anchors keep the non-internal entries
+        # analytically tractable; the invariant under test is the internal
+        # DOF entry, which is zero independent of these choices.
+        link_coms = [
+            [
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation0, link0/link1
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation1, link0/link1
+            ],
+            [
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation0, link0/link1
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation1, link0/link1
+            ],
+        ]
+        link_masses = [
+            [[1.0, 2.0], [1.0, 2.0]],  # World0
+            [[1.0, 2.0], [1.0, 2.0]],  # World1
+        ]
+
+        identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
+        joint_frames = [
+            [
+                [identity_xform, identity_xform],  # World0, articulation0, internal joint parent/child xforms
+                [identity_xform, identity_xform],  # World0, articulation1, internal joint parent/child xforms
+            ],
+            [
+                [identity_xform, identity_xform],  # World1, articulation0, internal joint parent/child xforms
+                [identity_xform, identity_xform],  # World1, articulation1, internal joint parent/child xforms
+            ],
+        ]
+
+        # Prismatic axis perpendicular to gravity: zero projection on the axis.
+        prismatic_x = wp.vec3(1.0, 0.0, 0.0)
+        joint_axis = [
+            [prismatic_x, prismatic_x],  # World0, articulation0/articulation1
+            [prismatic_x, prismatic_x],  # World1, articulation0/articulation1
+        ]
+
+        gravity_vec = wp.vec3(0.0, -10.0, 0.0)
+
+        # Fixed root: only DOF is the internal prismatic -> 0 (invariant).
+        # Floating root: (v_x, v_y, v_z, omega_x, omega_y, omega_z, q_internal).
+        #   Linear y = M_total * |g| = 3 * 10 = 30 (total weight).
+        #   Angular and internal = 0 (both CoMs at root origin; axis perp to gravity).
+        expected_gravity_comp_forces = [
+            0.0,  # World 0, fixed root, 1 dof (internal prismatic)
+            0.0,  # World 0, floating root, 6+1 dofs
+            30.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,  # World 1, fixed root, 1 dof (internal prismatic)
+            0.0,  # World 1, floating root, 6+1 dofs
+            30.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ]
+
         for I in self.INERTIA_PASSES:
             link_inertias = [
                 [[I, I], [I, I]],
                 [[I, I], [I, I]],
             ]
-            is_floating_base = [
-                [False, True],  # World0, articulation0 fixed, articulation1 free
-                [False, True],  # World1, articulation0 fixed, articulation1 free
-            ]
-            # Zero CoMs and identity joint anchors keep the non-internal entries
-            # analytically tractable; the invariant under test is the internal
-            # DOF entry, which is zero independent of these choices.
-            link_coms = [
-                [
-                    [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation0, link0/link1
-                    [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation1, link0/link1
-                ],
-                [
-                    [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation0, link0/link1
-                    [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation1, link0/link1
-                ],
-            ]
-            link_masses = [
-                [[1.0, 2.0], [1.0, 2.0]],  # World0
-                [[1.0, 2.0], [1.0, 2.0]],  # World1
-            ]
-
-            identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
-            joint_frames = [
-                [
-                    [identity_xform, identity_xform],  # World0, articulation0, internal joint parent/child xforms
-                    [identity_xform, identity_xform],  # World0, articulation1, internal joint parent/child xforms
-                ],
-                [
-                    [identity_xform, identity_xform],  # World1, articulation0, internal joint parent/child xforms
-                    [identity_xform, identity_xform],  # World1, articulation1, internal joint parent/child xforms
-                ],
-            ]
-
-            # Prismatic axis perpendicular to gravity: zero projection on the axis.
-            prismatic_x = wp.vec3(1.0, 0.0, 0.0)
-            joint_axis = [
-                [prismatic_x, prismatic_x],  # World0, articulation0/articulation1
-                [prismatic_x, prismatic_x],  # World1, articulation0/articulation1
-            ]
-
-            gravity_vec = wp.vec3(0.0, -10.0, 0.0)
-
-            # Fixed root: only DOF is the internal prismatic -> 0 (invariant).
-            # Floating root: (v_x, v_y, v_z, omega_x, omega_y, omega_z, q_internal).
-            #   Linear y = M_total * |g| = 3 * 10 = 30 (total weight).
-            #   Angular and internal = 0 (both CoMs at root origin; axis perp to gravity).
-            expected_gravity_comp_forces = [
-                0.0,  # World 0, fixed root, 1 dof (internal prismatic)
-                0.0,  # World 0, floating root, 6+1 dofs
-                30.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,  # World 1, fixed root, 1 dof (internal prismatic)
-                0.0,  # World 1, floating root, 6+1 dofs
-                30.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-            ]
-
             self._test_two_link_gravity_compensation_force(
                 gravity_vec,
                 "prismatic",
@@ -958,74 +958,74 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
             )
 
     def test_two_link_revolute_gravity_compensation_force_from_jnt_frame(self):
+        is_floating_base = [
+            [False, True],  # World0, articulation0 fixed, articulation1 free
+            [False, True],  # World1, articulation0 fixed, articulation1 free
+        ]
+        link_coms = [
+            [
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation0, link0/link1
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation1, link0/link1
+            ],
+            [
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation0, link0/link1
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation1, link0/link1
+            ],
+        ]
+        link_masses = [
+            [[1.0, 2.0], [1.0, 2.0]],  # World0,
+            [[1.0, 2.0], [1.0, 2.0]],  # World1
+        ]
+
+        child_anchor_0 = wp.transform(wp.vec3(-4.0, 0.0, 0.0), wp.quat_identity())
+        child_anchor_1 = wp.transform(wp.vec3(0.0, -4.0, 0.0), wp.quat(0.0, 0.7071068, 0.0, 0.7071068))
+        child_anchor_2 = wp.transform(wp.vec3(0.0, -4.0, 0.0), wp.quat_identity())
+        child_anchor_3 = wp.transform(wp.vec3(0.0, 0.0, -4.0), wp.quat_identity())
+        identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
+
+        joint_frames = [
+            [
+                [identity_xform, child_anchor_0],  # World0, articulation0, internal joint parent/child xforms
+                [identity_xform, child_anchor_1],  # World0, articulation1, internal joint parent/child xforms
+            ],
+            [
+                [identity_xform, child_anchor_2],  # World1, articulation0, internal joint parent/child xforms
+                [identity_xform, child_anchor_3],  # World1, articulation1, internal joint parent/child xforms
+            ],
+        ]
+
+        revolute_z = wp.vec3(0.0, 0.0, 1.0)
+        joint_axis = [
+            [revolute_z, revolute_z],  # World0, articulation0/articulation1
+            [revolute_z, revolute_z],  # World1, articulation0/articulation1
+        ]
+
+        gravity_vec = wp.vec3(0.0, -10.0, 0.0)
+
+        expected_gravity_comp_forces = [
+            80.0,  # World 0, fixed root, 1 dof
+            0.0,  # World 0, fjux root, 6+1 dofs
+            30.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,  # World 1, fixed root, 1 dof
+            0.0,  # World 1, floating root, 6+1 dofs
+            30.0,
+            0.0,
+            -80.0,
+            0.0,
+            0.0,
+            0.0,
+        ]
+
         for I in self.INERTIA_PASSES:
             link_inertias = [
                 [[I, I], [I, I]],
                 [[I, I], [I, I]],
             ]
-            is_floating_base = [
-                [False, True],  # World0, articulation0 fixed, articulation1 free
-                [False, True],  # World1, articulation0 fixed, articulation1 free
-            ]
-            link_coms = [
-                [
-                    [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation0, link0/link1
-                    [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation1, link0/link1
-                ],
-                [
-                    [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation0, link0/link1
-                    [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation1, link0/link1
-                ],
-            ]
-            link_masses = [
-                [[1.0, 2.0], [1.0, 2.0]],  # World0,
-                [[1.0, 2.0], [1.0, 2.0]],  # World1
-            ]
-
-            child_anchor_0 = wp.transform(wp.vec3(-4.0, 0.0, 0.0), wp.quat_identity())
-            child_anchor_1 = wp.transform(wp.vec3(0.0, -4.0, 0.0), wp.quat(0.0, 0.7071068, 0.0, 0.7071068))
-            child_anchor_2 = wp.transform(wp.vec3(0.0, -4.0, 0.0), wp.quat_identity())
-            child_anchor_3 = wp.transform(wp.vec3(0.0, 0.0, -4.0), wp.quat_identity())
-            identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
-
-            joint_frames = [
-                [
-                    [identity_xform, child_anchor_0],  # World0, articulation0, internal joint parent/child xforms
-                    [identity_xform, child_anchor_1],  # World0, articulation1, internal joint parent/child xforms
-                ],
-                [
-                    [identity_xform, child_anchor_2],  # World1, articulation0, internal joint parent/child xforms
-                    [identity_xform, child_anchor_3],  # World1, articulation1, internal joint parent/child xforms
-                ],
-            ]
-
-            revolute_z = wp.vec3(0.0, 0.0, 1.0)
-            joint_axis = [
-                [revolute_z, revolute_z],  # World0, articulation0/articulation1
-                [revolute_z, revolute_z],  # World1, articulation0/articulation1
-            ]
-
-            gravity_vec = wp.vec3(0.0, -10.0, 0.0)
-
-            expected_gravity_comp_forces = [
-                80.0,  # World 0, fixed root, 1 dof
-                0.0,  # World 0, fjux root, 6+1 dofs
-                30.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,  # World 1, fixed root, 1 dof
-                0.0,  # World 1, floating root, 6+1 dofs
-                30.0,
-                0.0,
-                -80.0,
-                0.0,
-                0.0,
-                0.0,
-            ]
-
             self._test_two_link_gravity_compensation_force(
                 gravity_vec,
                 "revolute",
@@ -1050,77 +1050,77 @@ class TestGravityCompensationForce(TestInverseDynamicsBase):
         linear-y entry still picks up the total weight, which acts as a
         sanity check that gravity is actually being applied.
         """
+        is_floating_base = [
+            [False, True],  # World0, articulation0 fixed, articulation1 free
+            [False, True],  # World1, articulation0 fixed, articulation1 free
+        ]
+        # Zero CoMs and identity joint anchors keep the non-internal entries
+        # analytically tractable; the invariant under test is the internal
+        # DOF entry, which is zero independent of these choices.
+        link_coms = [
+            [
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation0, link0/link1
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation1, link0/link1
+            ],
+            [
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation0, link0/link1
+                [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation1, link0/link1
+            ],
+        ]
+        link_masses = [
+            [[1.0, 2.0], [1.0, 2.0]],  # World0
+            [[1.0, 2.0], [1.0, 2.0]],  # World1
+        ]
+
+        identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
+        joint_frames = [
+            [
+                [identity_xform, identity_xform],  # World0, articulation0, internal joint parent/child xforms
+                [identity_xform, identity_xform],  # World0, articulation1, internal joint parent/child xforms
+            ],
+            [
+                [identity_xform, identity_xform],  # World1, articulation0, internal joint parent/child xforms
+                [identity_xform, identity_xform],  # World1, articulation1, internal joint parent/child xforms
+            ],
+        ]
+
+        # Revolute axis aligned with gravity: zero moment about the axis.
+        revolute_y = wp.vec3(0.0, 1.0, 0.0)
+        joint_axis = [
+            [revolute_y, revolute_y],  # World0, articulation0/articulation1
+            [revolute_y, revolute_y],  # World1, articulation0/articulation1
+        ]
+
+        gravity_vec = wp.vec3(0.0, -10.0, 0.0)
+
+        # Fixed root: only DOF is the internal revolute -> 0 (invariant).
+        # Floating root: (v_x, v_y, v_z, omega_x, omega_y, omega_z, q_internal).
+        #   Linear y = M_total * |g| = 3 * 10 = 30 (total weight).
+        #   Angular and internal = 0 (both CoMs at root origin; axis ∥ gravity).
+        expected_gravity_comp_forces = [
+            0.0,  # World 0, fixed root, 1 dof (internal revolute)
+            0.0,  # World 0, floating root, 6+1 dofs
+            30.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,  # World 1, fixed root, 1 dof (internal revolute)
+            0.0,  # World 1, floating root, 6+1 dofs
+            30.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ]
+
         for I in self.INERTIA_PASSES:
             link_inertias = [
                 [[I, I], [I, I]],
                 [[I, I], [I, I]],
             ]
-            is_floating_base = [
-                [False, True],  # World0, articulation0 fixed, articulation1 free
-                [False, True],  # World1, articulation0 fixed, articulation1 free
-            ]
-            # Zero CoMs and identity joint anchors keep the non-internal entries
-            # analytically tractable; the invariant under test is the internal
-            # DOF entry, which is zero independent of these choices.
-            link_coms = [
-                [
-                    [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation0, link0/link1
-                    [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation1, link0/link1
-                ],
-                [
-                    [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation0, link0/link1
-                    [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World1, articulation1, link0/link1
-                ],
-            ]
-            link_masses = [
-                [[1.0, 2.0], [1.0, 2.0]],  # World0
-                [[1.0, 2.0], [1.0, 2.0]],  # World1
-            ]
-
-            identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
-            joint_frames = [
-                [
-                    [identity_xform, identity_xform],  # World0, articulation0, internal joint parent/child xforms
-                    [identity_xform, identity_xform],  # World0, articulation1, internal joint parent/child xforms
-                ],
-                [
-                    [identity_xform, identity_xform],  # World1, articulation0, internal joint parent/child xforms
-                    [identity_xform, identity_xform],  # World1, articulation1, internal joint parent/child xforms
-                ],
-            ]
-
-            # Revolute axis aligned with gravity: zero moment about the axis.
-            revolute_y = wp.vec3(0.0, 1.0, 0.0)
-            joint_axis = [
-                [revolute_y, revolute_y],  # World0, articulation0/articulation1
-                [revolute_y, revolute_y],  # World1, articulation0/articulation1
-            ]
-
-            gravity_vec = wp.vec3(0.0, -10.0, 0.0)
-
-            # Fixed root: only DOF is the internal revolute -> 0 (invariant).
-            # Floating root: (v_x, v_y, v_z, omega_x, omega_y, omega_z, q_internal).
-            #   Linear y = M_total * |g| = 3 * 10 = 30 (total weight).
-            #   Angular and internal = 0 (both CoMs at root origin; axis ∥ gravity).
-            expected_gravity_comp_forces = [
-                0.0,  # World 0, fixed root, 1 dof (internal revolute)
-                0.0,  # World 0, floating root, 6+1 dofs
-                30.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,  # World 1, fixed root, 1 dof (internal revolute)
-                0.0,  # World 1, floating root, 6+1 dofs
-                30.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-            ]
-
             self._test_two_link_gravity_compensation_force(
                 gravity_vec,
                 "revolute",
@@ -1253,12 +1253,12 @@ class TestMassMatrix(TestInverseDynamicsBase):
         np.testing.assert_allclose(inverse_dynamics.mass_matrix.numpy(), H_reference, rtol=1e-6, atol=1e-6)
 
 
-class TestGravityCompensationForceCPU(TestGravityCompensationForce, unittest.TestCase):
+class TestGravCompForceCPU(TestGravCompForce, unittest.TestCase):
     device = wp.get_device("cpu")
 
 
 @unittest.skipUnless(wp.is_cuda_available(), "CUDA not available")
-class TestGravityCompensationForceCUDA(TestGravityCompensationForce, unittest.TestCase):
+class TestGravCompForceCUDA(TestGravCompForce, unittest.TestCase):
     device = wp.get_device("cuda:0") if wp.is_cuda_available() else None
 
 
