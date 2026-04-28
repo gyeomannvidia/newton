@@ -434,6 +434,8 @@ class TestGravCompForce(TestInverseDynamicsBase):
             ],
         ]
 
+        joint_q = self._default_joint_q(is_floating_base)
+
         link_coms = [
             [
                 [wp.vec3(1.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 1.0)],  # World0, articulation0, link0/link1
@@ -480,7 +482,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
                     is_floating_base,
                     joint_axis,
                     joint_frames,
-                    self._default_joint_q(is_floating_base),
+                    joint_q,
                     link_coms,
                     link_masses,
                     link_inertias,
@@ -512,6 +514,8 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 [identity_xform, identity_xform],  # World1, articulation1, root/internal joint
             ],
         ]
+
+        joint_q = self._default_joint_q(is_floating_base)
 
         link_coms = [
             [
@@ -558,7 +562,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 is_floating_base,
                 joint_axis,
                 joint_frames,
-                self._default_joint_q(is_floating_base),
+                joint_q,
                 link_coms,
                 link_masses,
                 link_inertias,
@@ -742,6 +746,8 @@ class TestGravCompForce(TestInverseDynamicsBase):
             ],
         ]
 
+        joint_q = self._default_joint_q(is_floating_base)
+
         link_coms = [
             [
                 [wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)],  # World0, articulation0, link0/link1
@@ -780,7 +786,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 is_floating_base,
                 joint_axis,
                 joint_frames,
-                self._default_joint_q(is_floating_base),
+                joint_q,
                 link_coms,
                 link_masses,
                 link_inertias,
@@ -812,6 +818,8 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 [identity_xform, identity_xform],  # World1, articulation1, root/internal joint
             ],
         ]
+
+        joint_q = self._default_joint_q(is_floating_base)
 
         link_coms = [
             [
@@ -858,7 +866,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 is_floating_base,
                 joint_axis,
                 joint_frames,
-                self._default_joint_q(is_floating_base),
+                joint_q,
                 link_coms,
                 link_masses,
                 link_inertias,
@@ -901,6 +909,8 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 [identity_xform, identity_xform],  # World1, articulation1, internal joint parent/child xforms
             ],
         ]
+
+        joint_q = self._default_joint_q(is_floating_base)
 
         # Zero CoMs and identity joint anchors keep the non-internal entries
         # analytically tractable; the invariant under test is the internal
@@ -954,7 +964,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 is_floating_base,
                 joint_axis,
                 joint_frames,
-                self._default_joint_q(is_floating_base),
+                joint_q,
                 link_coms,
                 link_masses,
                 link_inertias,
@@ -990,6 +1000,8 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 [identity_xform, child_anchor_3],  # World1, articulation1, internal joint parent/child xforms
             ],
         ]
+
+        joint_q = self._default_joint_q(is_floating_base)
 
         link_coms = [
             [
@@ -1036,7 +1048,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 is_floating_base,
                 joint_axis,
                 joint_frames,
-                self._default_joint_q(is_floating_base),
+                joint_q,
                 link_coms,
                 link_masses,
                 link_inertias,
@@ -1080,6 +1092,8 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 [identity_xform, identity_xform],  # World1, articulation1, internal joint parent/child xforms
             ],
         ]
+
+        joint_q = self._default_joint_q(is_floating_base)
 
         # Zero CoMs and identity joint anchors keep the non-internal entries
         # analytically tractable; the invariant under test is the internal
@@ -1133,7 +1147,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 is_floating_base,
                 joint_axis,
                 joint_frames,
-                self._default_joint_q(is_floating_base),
+                joint_q,
                 link_coms,
                 link_masses,
                 link_inertias,
