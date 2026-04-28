@@ -47,17 +47,10 @@ class TestInverseDynamicsBase:
         link_coms: list[wp.vec3],
         link_masses: list[float],
         joint_frames: list[wp.transform],
-        link_inertias: list[wp.mat33] | None = None,
+        link_inertias: list[wp.mat33],
     ) -> newton.ModelBuilder:
         gravity_scalar, up_axis = _gravity_vec_to_scalar_and_axis(gravity)
         builder = newton.ModelBuilder(gravity=gravity_scalar, up_axis=up_axis)
-
-        # Default to unit inertia tensors per link; inverse-dynamics gravity
-        # compensation doesn't read the inertia tensor (G(q) only depends on
-        # mass and CoM), so any PSD matrix works for tests that don't care.
-        if link_inertias is None:
-            identity_inertia = wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
-            link_inertias = [identity_inertia, identity_inertia]
 
         identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
 
@@ -142,6 +135,10 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
                 wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
                 wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
             ],
+            link_inertias=[
+                wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+                wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+            ],
         )
         model = builder.finalize(device=self.device)
         state = self._pose_pendulum(model)
@@ -187,7 +184,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
         link_masses: list[list[list[float]]],
         joint_frames: list[list[list[wp.transform]]],
         expected_gravity_comp_forces: list[float],
-        link_inertias: list[list[list[wp.mat33]]] | None = None,
+        link_inertias: list[list[list[wp.mat33]]],
         joint_q: list[list[list[float] | None]] | None = None,
     ):
         """G(q) is populated correctly for a multi-world, multi-articulation model.
@@ -205,10 +202,8 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 the internal DOF joint.
             expected_gravity_comp_forces: Flat expected ``-G(q)`` in the order
                 Newton reports them.
-            link_inertias: Optional per-link body-frame inertia tensors
-                ``[w][a][link]`` as ``wp.mat33``. Defaults to unit inertia
-                tensors, which is fine for gravity-compensation tests since
-                ``G(q)`` only reads mass and CoM.
+            link_inertias: Per-link body-frame inertia tensors
+                ``[w][a][link]`` as ``wp.mat33``.
             joint_q: Optional per-articulation initial-state ``joint_q``
                 overrides ``[w][a]``. Each entry is either ``None`` (use the
                 default zero/identity ``model.state()`` initialization) or a
@@ -243,9 +238,8 @@ class TestGravCompForce(TestInverseDynamicsBase):
                     "link_coms": link_coms[i][j],
                     "link_masses": link_masses[i][j],
                     "joint_frames": joint_frames[i][j],
+                    "link_inertias": link_inertias[i][j],
                 }
-                if link_inertias is not None:
-                    kwargs["link_inertias"] = link_inertias[i][j]
                 articulation_builder = self._build_two_link_pendulum(**kwargs)
                 world_builder.add_builder(articulation_builder)
             model_builder.add_world(world_builder)
@@ -1208,6 +1202,10 @@ class TestCoriolisCompensationForce(TestInverseDynamicsBase):
                 wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
                 wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
             ],
+            link_inertias=[
+                wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+                wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+            ],
         )
         model = builder.finalize(device=self.device)
         state = self._pose_pendulum(model)
@@ -1240,6 +1238,10 @@ class TestMassMatrix(TestInverseDynamicsBase):
             joint_frames=[
                 wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
                 wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
+            ],
+            link_inertias=[
+                wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+                wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
             ],
         )
         model = builder.finalize(device=self.device)
