@@ -158,14 +158,19 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         self.assertGreater(float(np.linalg.norm(g)), 1e-6)
         self.assertGreater(float(np.linalg.norm(c)), 1e-6)
 
-    def test_mass_matrix_force(self):
-        """tau == M(q)*qddot for a fixed-base 3-link chain with zero gravity 
-        and zero dof velocity.
-        Compute the mass matrix H(q) of an articulation and use that to compute
-        the total compensation force H(q)*qddot.  Apply the total compensation force
-        for 1 sim step and measure qddot by differentiating qdot wrt time. This 
-        should produce the original qddot used to compute the compensation force.
+    def _test_inverse_dynamics_force(self, non_zero_gravity: bool, non_zero_initial_dof_velocities: bool):
+        """Manipulator-equation test parameterized on whether the bias terms are exercised.
+
+        With gravity and ``joint_qd`` both zero, ``tau = M(q)*qddot``. Setting
+        ``non_zero_gravity`` switches on a non-zero ``g(q)`` term;
+        ``non_zero_initial_dof_velocities`` switches on a non-zero
+        ``C(q, q_dot)*q_dot`` term. In every case
+        :func:`newton.eval_inverse_dynamics_force` must produce the joint force
+        that drives the system to the prescribed ``qddot`` after one
+        small-step simulation, recovered from the velocity change.
         """
+        gravity_value = -10.0 if non_zero_gravity else 0.0
+
         # Each articulation is a chain of three uniform-density 4x2x2 boxes;
         # the per-articulation density (and so the link mass and inertia) varies
         # to exercise the per-articulation kernel paths with different M(q).
@@ -184,7 +189,7 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         z_axis = wp.vec3(0.0, 0.0, 1.0)
 
         def build_articulation(mass: float, inertia: wp.mat33, floating_base: bool) -> newton.ModelBuilder:
-            b = newton.ModelBuilder(gravity=0.0, up_axis=newton.Axis.Z)
+            b = newton.ModelBuilder(gravity=gravity_value, up_axis=newton.Axis.Z)
             link0 = b.add_link(
                 xform=identity_xform,
                 mass=mass,
@@ -255,10 +260,10 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         per_articulation_masses = [16.0, 32.0, 8.0, 24.0]
         assert len(per_articulation_masses) == num_arts
 
-        builder = newton.ModelBuilder(gravity=0.0, up_axis=newton.Axis.Z)
+        builder = newton.ModelBuilder(gravity=gravity_value, up_axis=newton.Axis.Z)
         art_idx = 0
         for _ in range(num_worlds):
-            world_builder = newton.ModelBuilder(gravity=0.0, up_axis=newton.Axis.Z)
+            world_builder = newton.ModelBuilder(gravity=gravity_value, up_axis=newton.Axis.Z)
             for _ in range(num_arts_per_world):
                 m = per_articulation_masses[art_idx]
                 world_builder.add_builder(build_articulation(m, box_inertia(m), floating_flags[art_idx]))
@@ -286,12 +291,10 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
             (np.pi / 4.0, -np.pi / 3.0),
             (np.pi / 2.0, np.pi / 2.0),
         ]
-        initial_joint_speeds = [
-            (0.0, 0.0),
-            (0.0, 0.0),
-            (0.0, 0.0),
-            (0.0, 0.0),
-        ]
+        # Internal-DOF velocities. Non-zero values let the C(q, q_dot)*q_dot term
+        # of the manipulator equation contribute.
+        internal_speed = (0.5, -0.3) if non_zero_initial_dof_velocities else (0.0, 0.0)
+        initial_joint_speeds = [internal_speed] * 4
         # The first entry matches PhysX's MassMatrixForce (qddot[i] = 0.02 * i for
         # joint i in [1, 2]); the others vary magnitudes and signs to broaden coverage.
         initial_joint_accelerations = [
@@ -302,13 +305,28 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         ]
 
         # Floating-base root state used for every test case. The base sits at the
-        # world origin with identity orientation; root velocity is zero (so the
-        # manipulator equation collapses to tau = M*qddot for these DOFs too).
-        # Root accelerations are arbitrary non-zero values so the floating root
+        # world origin with identity orientation. Root velocity is zero unless
+        # ``non_zero_initial_dof_velocities`` flips on the angular DOFs (linear
+        # stays zero -- non-zero ``omega x v`` cross-coupling between root linear
+        # and angular velocity exposes a free-joint frame-convention mismatch
+        # between Newton's RNEA and MuJoCo, which we sidestep here). Root
+        # accelerations are arbitrary non-zero values so the floating root
         # exercises non-trivial M(q)*qddot rows.
         floating_root_q = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
-        floating_root_qd = (0.0,) * 6
+        floating_root_qd = (
+            (0.0, 0.0, 0.0, 0.3, -0.1, 0.2) if non_zero_initial_dof_velocities else (0.0,) * 6
+        )
         floating_root_qdd = (0.05, -0.1, 0.15, 0.2, -0.25, 0.3)
+
+        # Pick the smallest eval_type that covers the active bias terms:
+        # MASS_MATRIX is always required for M*qddot; add GRAVITY_COMPENSATION_FORCE
+        # only when gravity is non-zero, CORIOLIS_COMPENSATION_FORCE only when
+        # joint_qd is non-zero. When both are non-zero this collapses to ALL.
+        eval_type = newton.InverseDynamics.EvalType.MASS_MATRIX
+        if non_zero_gravity:
+            eval_type |= newton.InverseDynamics.EvalType.GRAVITY_COMPENSATION_FORCE
+        if non_zero_initial_dof_velocities:
+            eval_type |= newton.InverseDynamics.EvalType.CORIOLIS_COMPENSATION_FORCE
 
         for joint_q_values, joint_qd_values, joint_qdd_values in zip(
             initial_joint_positions, initial_joint_speeds, initial_joint_accelerations
@@ -338,13 +356,7 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
                 newton.eval_fk(model, state.joint_q, state.joint_qd, state)
 
                 # Manipulator equation: tau = M(q)*qddot + C(q,qdot)*qdot + g(q).
-                # With gravity = 0 and joint_qd = 0 the Coriolis and gravity
-                # compensation forces are identically zero, so we only compute
-                # the mass matrix and rely on the inverse_dynamics buffers'
-                # zero-initialized coriolis_compensation_force / gravity_compensation_force.
-                newton.eval_inverse_dynamics(
-                    model, state, newton.InverseDynamics.EvalType.MASS_MATRIX, inverse_dynamics
-                )
+                newton.eval_inverse_dynamics(model, state, eval_type, inverse_dynamics)
                 qddot = wp.array(qddot_target, dtype=wp.float32, device=self.device)
                 newton.eval_inverse_dynamics_force(
                     model,
@@ -359,10 +371,25 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
 
                 solver.step(state, state_next, control, contacts, dt)
 
-                # Recover qddot from the velocity change. With joint_qd = 0 initially,
-                # this is state_next.joint_qd / dt up to integrator truncation error.
+                # Recover qddot from the velocity change.
                 qddot_observed = (state_next.joint_qd.numpy() - joint_qd_full) / dt
                 np.testing.assert_allclose(qddot_observed, qddot_target, atol=1e-3, rtol=1e-3)
+
+    def test_inverse_dynamics_force_baseline(self):
+        """Manipulator equation with zero gravity and zero initial DOF velocities."""
+        self._test_inverse_dynamics_force(non_zero_gravity=False, non_zero_initial_dof_velocities=False)
+
+    def test_inverse_dynamics_force_with_gravity(self):
+        """Manipulator equation with non-zero gravity (g(q) is non-trivial)."""
+        self._test_inverse_dynamics_force(non_zero_gravity=True, non_zero_initial_dof_velocities=False)
+
+    def test_inverse_dynamics_force_with_velocity(self):
+        """Manipulator equation with non-zero initial DOF velocities (C(q, q_dot)*q_dot is non-trivial)."""
+        self._test_inverse_dynamics_force(non_zero_gravity=False, non_zero_initial_dof_velocities=True)
+
+    def test_inverse_dynamics_force_with_gravity_and_velocity(self):
+        """Manipulator equation with non-zero gravity and non-zero initial DOF velocities."""
+        self._test_inverse_dynamics_force(non_zero_gravity=True, non_zero_initial_dof_velocities=True)
 
 
 class TestGravCompForce(TestInverseDynamicsBase):
