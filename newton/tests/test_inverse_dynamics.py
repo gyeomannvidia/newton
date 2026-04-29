@@ -1422,12 +1422,12 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
         articulation where Link 0 is attached to the world by a revolute
         joint about world +Z and Link 1 (the slider) is attached to
         Link 0 by a prismatic joint along Link 0's local +X. Link 0 is
-        given a small but non-zero mass so the dominant inertial terms
-        come from the slider, modeled as a 0.5 kg point mass with
-        negligible rotational inertia. Drives and friction are disabled
-        explicitly so the only joint loads come from inertial coupling
-        (the RNEA compensation pass already zeroes these internally, but
-        we make the intent explicit at the model level).
+        given a small but non-zero mass so the dominant translational
+        inertia comes from the slider (a 0.5 kg point mass on the
+        rotating axis). Drives and friction are disabled explicitly so
+        the only joint loads come from inertial coupling (the RNEA
+        compensation pass already zeroes these internally, but we make
+        the intent explicit at the model level).
 
         With ``q = (theta, r)`` and ``q_dot = (omega, v_r)`` the slider
         traces a circle of varying radius and the kinetic energy is
@@ -1438,7 +1438,13 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
             c_r     = -m * r * omega^2          (centrifugal pull)
 
         ``theta`` is irrelevant because the system is rotationally
-        symmetric about world +Z.
+        symmetric about world +Z. Link rotational inertia is irrelevant
+        too: the angular velocity vector is purely along +Z, so only
+        each link's ``I[2, 2]`` enters the kinetic energy, and that
+        component is invariant under rotations about Z, so it adds a
+        constant offset to ``M[0, 0]`` but contributes nothing to
+        ``dM/dq``. The outer loop sweeps three qualitatively different
+        link inertias (negligible, unit, and 100x unit) to confirm this.
         """
         identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
         z_axis = wp.vec3(0.0, 0.0, 1.0)
@@ -1446,75 +1452,77 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
 
         m_slider = 0.5
         m_base = 1e-6
-        I_negligible = wp.mat33(1e-6, 0.0, 0.0, 0.0, 1e-6, 0.0, 0.0, 0.0, 1e-6)
-
-        builder = newton.ModelBuilder(gravity=0.0, up_axis=newton.Axis.Z)
-
-        base = builder.add_link(
-            xform=identity_xform,
-            mass=m_base,
-            inertia=I_negligible,
-            com=wp.vec3(0.0, 0.0, 0.0),
-        )
-        j_rot = builder.add_joint_revolute(
-            parent=-1,
-            child=base,
-            axis=z_axis,
-            parent_xform=identity_xform,
-            child_xform=identity_xform,
-            target_ke=0.0,
-            target_kd=0.0,
-            friction=0.0,
-        )
-        slider = builder.add_link(
-            xform=identity_xform,
-            mass=m_slider,
-            inertia=I_negligible,
-            com=wp.vec3(0.0, 0.0, 0.0),
-        )
-        j_slide = builder.add_joint_prismatic(
-            parent=base,
-            child=slider,
-            axis=x_axis,
-            parent_xform=identity_xform,
-            child_xform=identity_xform,
-            target_ke=0.0,
-            target_kd=0.0,
-            friction=0.0,
-        )
-        builder.add_articulation([j_rot, j_slide], label="radial_slider")
-
-        model = builder.finalize(device=self.device)
-        inverse_dynamics = model.inverse_dynamics()
 
         omega = 2.0
         v_r = 0.1
         r = 1.0
         theta = 0.7  # arbitrary; system is rotationally symmetric about +Z
 
-        state = model.state()
-        joint_q = state.joint_q.numpy()
-        joint_q[:] = (theta, r)
-        state.joint_q.assign(joint_q)
-        joint_qd = state.joint_qd.numpy()
-        joint_qd[:] = (omega, v_r)
-        state.joint_qd.assign(joint_qd)
-        newton.eval_fk(model, state.joint_q, state.joint_qd, state)
-
-        newton.eval_inverse_dynamics(
-            model,
-            state,
-            newton.InverseDynamics.EvalType.CORIOLIS_COMPENSATION_FORCE,
-            inverse_dynamics,
-        )
-
         expected = (
             2.0 * m_slider * r * omega * v_r,
             -m_slider * r * omega * omega,
         )
 
-        measured = inverse_dynamics.coriolis_compensation_force.numpy()
-        np.testing.assert_allclose(-measured, expected, atol=1e-4, rtol=1e-5)
+        I_negligible = wp.mat33(1e-6, 0.0, 0.0, 0.0, 1e-6, 0.0, 0.0, 0.0, 1e-6)
+        for link_inertia in (I_negligible, *self.INERTIA_PASSES):
+            with self.subTest(inertia=link_inertia):
+                builder = newton.ModelBuilder(gravity=0.0, up_axis=newton.Axis.Z)
+
+                base = builder.add_link(
+                    xform=identity_xform,
+                    mass=m_base,
+                    inertia=link_inertia,
+                    com=wp.vec3(0.0, 0.0, 0.0),
+                )
+                j_rot = builder.add_joint_revolute(
+                    parent=-1,
+                    child=base,
+                    axis=z_axis,
+                    parent_xform=identity_xform,
+                    child_xform=identity_xform,
+                    target_ke=0.0,
+                    target_kd=0.0,
+                    friction=0.0,
+                )
+                slider = builder.add_link(
+                    xform=identity_xform,
+                    mass=m_slider,
+                    inertia=link_inertia,
+                    com=wp.vec3(0.0, 0.0, 0.0),
+                )
+                j_slide = builder.add_joint_prismatic(
+                    parent=base,
+                    child=slider,
+                    axis=x_axis,
+                    parent_xform=identity_xform,
+                    child_xform=identity_xform,
+                    target_ke=0.0,
+                    target_kd=0.0,
+                    friction=0.0,
+                )
+                builder.add_articulation([j_rot, j_slide], label="radial_slider")
+
+                model = builder.finalize(device=self.device)
+                inverse_dynamics = model.inverse_dynamics()
+
+                state = model.state()
+                joint_q = state.joint_q.numpy()
+                joint_q[:] = (theta, r)
+                state.joint_q.assign(joint_q)
+                joint_qd = state.joint_qd.numpy()
+                joint_qd[:] = (omega, v_r)
+                state.joint_qd.assign(joint_qd)
+                newton.eval_fk(model, state.joint_q, state.joint_qd, state)
+
+                newton.eval_inverse_dynamics(
+                    model,
+                    state,
+                    newton.InverseDynamics.EvalType.CORIOLIS_COMPENSATION_FORCE,
+                    inverse_dynamics,
+                )
+
+                measured = inverse_dynamics.coriolis_compensation_force.numpy()
+                np.testing.assert_allclose(-measured, expected, atol=1e-4, rtol=1e-5)
 
 
 class TestMassMatrix(TestInverseDynamicsBase):
