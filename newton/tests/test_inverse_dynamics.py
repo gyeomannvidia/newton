@@ -47,7 +47,7 @@ class TestInverseDynamicsBase:
     INERTIA_PASSES: ClassVar[list[wp.mat33]] = [I_UNIT, I_100]
 
     @staticmethod
-    def _build_two_link_pendulum(
+    def _build_two_link_articulation(
         gravity: wp.vec3,
         floating_base: bool,
         joint_type: str,
@@ -118,7 +118,7 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         fixed root with a single revolute DOF has identically-zero Coriolis
         and would trivially defeat that assertion.
         """
-        builder = self._build_two_link_pendulum(
+        builder = self._build_two_link_articulation(
             gravity=wp.vec3(0.0, -9.81, 0.0),
             floating_base=True,
             joint_type="revolute",
@@ -224,7 +224,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
         num_worlds = len(is_floating_base)
         num_arts_per_world = len(is_floating_base[0])
         num_links_per_articulation = len(link_coms[0][0])
-        # _build_two_link_pendulum hard-codes a two-link articulation, so the
+        # _build_two_link_articulation hard-codes a two-link articulation, so the
         # caller's link_coms layout must agree.
         self.assertEqual(num_links_per_articulation, 2)
 
@@ -243,7 +243,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
         for i in range(0, num_worlds):
             world_builder = newton.ModelBuilder(gravity=gravity_scalar, up_axis=up_axis)
             for j in range(0, num_arts_per_world):
-                articulation_builder = self._build_two_link_pendulum(
+                articulation_builder = self._build_two_link_articulation(
                     gravity=gravity_vec,
                     joint_type=joint_type,
                     joint_axis=joint_axis[i][j],
@@ -302,7 +302,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
     def test_gravity_zero_without_gravity(self):
         """G(q) must vanish when the model has zero gravity."""
         for I in self.INERTIA_PASSES:
-            builder = self._build_two_link_pendulum(
+            builder = self._build_two_link_articulation(
                 gravity=wp.vec3(0.0, 0.0, 0.0),
                 floating_base=False,
                 joint_type="revolute",
@@ -343,7 +343,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
         from one that returns zeros.
         """
         for I in self.INERTIA_PASSES:
-            builder = self._build_two_link_pendulum(
+            builder = self._build_two_link_articulation(
                 gravity=wp.vec3(0.0, -9.81, 0.0),
                 floating_base=False,
                 joint_type="revolute",
@@ -1252,7 +1252,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
         identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
         child_anchor_back = wp.transform(wp.vec3(-arm_length, 0.0, 0.0), wp.quat_identity())
         for I in self.INERTIA_PASSES:
-            builder = self._build_two_link_pendulum(
+            builder = self._build_two_link_articulation(
                 gravity=wp.vec3(0.0, -g_mag, 0.0),
                 floating_base=False,
                 joint_type="revolute",
@@ -1296,7 +1296,7 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
 
     def test_coriolis_zero_at_rest(self):
         """C(q, q_dot) must vanish when q_dot = 0."""
-        builder = self._build_two_link_pendulum(
+        builder = self._build_two_link_articulation(
             gravity=wp.vec3(0.0, -9.81, 0.0),
             floating_base=False,
             joint_type="revolute",
@@ -1616,7 +1616,7 @@ class TestMassMatrix(TestInverseDynamicsBase):
 
     def test_mass_matrix_matches_eval_mass_matrix(self):
         """eval_inverse_dynamics(EvalType.MASS_MATRIX) must match newton.eval_mass_matrix element-wise."""
-        builder = self._build_two_link_pendulum(
+        builder = self._build_two_link_articulation(
             gravity=wp.vec3(0.0, -9.81, 0.0),
             floating_base=False,
             joint_type="revolute",
@@ -1731,21 +1731,21 @@ class TestGravCompForceCUDA(TestGravCompForce, unittest.TestCase):
     device = wp.get_device("cuda:0") if wp.is_cuda_available() else None
 
 
-class TestMassMatrixCPU(TestMassMatrix, unittest.TestCase):
-    device = wp.get_device("cpu")
-
-
-@unittest.skipUnless(wp.is_cuda_available(), "CUDA not available")
-class TestMassMatrixCUDA(TestMassMatrix, unittest.TestCase):
-    device = wp.get_device("cuda:0") if wp.is_cuda_available() else None
-
-
 class TestCoriolisCompForceCPU(TestCoriolisCompForce, unittest.TestCase):
     device = wp.get_device("cpu")
 
 
 @unittest.skipUnless(wp.is_cuda_available(), "CUDA not available")
 class TestCoriolisCompForceCUDA(TestCoriolisCompForce, unittest.TestCase):
+    device = wp.get_device("cuda:0") if wp.is_cuda_available() else None
+
+
+class TestMassMatrixCPU(TestMassMatrix, unittest.TestCase):
+    device = wp.get_device("cpu")
+
+
+@unittest.skipUnless(wp.is_cuda_available(), "CUDA not available")
+class TestMassMatrixCUDA(TestMassMatrix, unittest.TestCase):
     device = wp.get_device("cuda:0") if wp.is_cuda_available() else None
 
 
