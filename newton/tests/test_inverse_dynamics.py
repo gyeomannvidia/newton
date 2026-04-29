@@ -107,20 +107,6 @@ class TestInverseDynamicsBase:
 
         return builder
 
-    def _pose_pendulum(self, model):
-        state = model.state()
-        joint_q = state.joint_q.numpy()
-        # Apply a non-trivial pose to whichever coords exist. Fixed-root + one DOF
-        # has joint_q of length 1; floating root (7 free coords) + one DOF has
-        # length 8 — both cases get at least the leading entry perturbed.
-        if joint_q.shape[0] >= 1:
-            joint_q[0] = 0.3
-        if joint_q.shape[0] >= 2:
-            joint_q[1] = 0.5
-        state.joint_q.assign(joint_q)
-        newton.eval_fk(model, state.joint_q, state.joint_qd, state)
-        return state
-
 
 class TestManipulatorEquation(TestInverseDynamicsBase):
     """Manipulator-equation tests covering combined inverse-dynamics outputs."""
@@ -146,7 +132,12 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
             link_inertias=[self.I_UNIT, self.I_UNIT],
         )
         model = builder.finalize(device=self.device)
-        state = self._pose_pendulum(model)
+        state = model.state()
+        joint_q = state.joint_q.numpy()
+        joint_q[0] = 0.3
+        joint_q[1] = 0.5
+        state.joint_q.assign(joint_q)
+        newton.eval_fk(model, state.joint_q, state.joint_qd, state)
         joint_qd = state.joint_qd.numpy()
         # Populate linear, angular, and internal DOFs so Coriolis has real
         # coupling: pure linear base motion doesn't couple through C(q, q_dot).
@@ -325,7 +316,11 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 link_inertias=[I, I],
             )
             model = builder.finalize(device=self.device)
-            state = self._pose_pendulum(model)
+            state = model.state()
+            joint_q = state.joint_q.numpy()
+            joint_q[0] = 0.3
+            state.joint_q.assign(joint_q)
+            newton.eval_fk(model, state.joint_q, state.joint_qd, state)
 
             inverse_dynamics = model.inverse_dynamics()
             newton.eval_inverse_dynamics(
@@ -362,7 +357,11 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 link_inertias=[I, I],
             )
             model = builder.finalize(device=self.device)
-            state = self._pose_pendulum(model)
+            state = model.state()
+            joint_q = state.joint_q.numpy()
+            joint_q[0] = 0.3
+            state.joint_q.assign(joint_q)
+            newton.eval_fk(model, state.joint_q, state.joint_qd, state)
 
             inverse_dynamics = model.inverse_dynamics()
             newton.eval_inverse_dynamics(
@@ -1311,7 +1310,11 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
             link_inertias=[self.I_UNIT, self.I_UNIT],
         )
         model = builder.finalize(device=self.device)
-        state = self._pose_pendulum(model)
+        state = model.state()
+        joint_q = state.joint_q.numpy()
+        joint_q[0] = 0.3
+        state.joint_q.assign(joint_q)
+        newton.eval_fk(model, state.joint_q, state.joint_qd, state)
         state.joint_qd.zero_()
 
         inverse_dynamics = model.inverse_dynamics()
@@ -1627,7 +1630,11 @@ class TestMassMatrix(TestInverseDynamicsBase):
             link_inertias=[self.I_UNIT, self.I_UNIT],
         )
         model = builder.finalize(device=self.device)
-        state = self._pose_pendulum(model)
+        state = model.state()
+        joint_q = state.joint_q.numpy()
+        joint_q[0] = 0.3
+        state.joint_q.assign(joint_q)
+        newton.eval_fk(model, state.joint_q, state.joint_qd, state)
 
         H_reference = newton.eval_mass_matrix(model, state).numpy()
 
@@ -1635,6 +1642,84 @@ class TestMassMatrix(TestInverseDynamicsBase):
         newton.eval_inverse_dynamics(model, state, newton.InverseDynamics.EvalType.MASS_MATRIX, inverse_dynamics)
 
         np.testing.assert_allclose(inverse_dynamics.mass_matrix.numpy(), H_reference, rtol=1e-6, atol=1e-6)
+
+    def test_mass_matrix_planar_double_pendulum_matches_analytical(self):
+        """M(q) for a planar double pendulum matches the closed-form expression.
+
+        Same articulation as
+        ``TestCoriolisCompForce.test_coriolis_double_pendulum_matches_analytical``:
+        fixed-base, two revolute joints both about world +Y, link
+        length 1, 25 kg point mass at each link midpoint, identity
+        body-frame inertia. For two revolute joints sharing the same
+        axis the mass matrix is:
+
+            M_11 = m1*l1c^2 + m2*(L1^2 + l2c^2 + 2*L1*l2c*cos(q2)) + Iyy_1 + Iyy_2
+            M_22 = m2*l2c^2 + Iyy_2
+            M_12 = m2*(l2c^2 + L1*l2c*cos(q2)) + Iyy_2
+
+        With m=25, l1c=l2c=0.5, L1=1, Iyy=1 (from ``I_UNIT``):
+
+            M_11 = 39.5 + 25 * cos(q2)
+            M_22 = 7.25
+            M_12 = 7.25 + 12.5 * cos(q2)
+
+        ``M`` depends only on q2 (rotational symmetry about world +Y);
+        the test sweeps q2 in {0, pi/2, pi} to exercise the full
+        range of cos(q2).
+        """
+        identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
+        pos_half = wp.transform(wp.vec3(0.5, 0.0, 0.0), wp.quat_identity())
+        neg_half = wp.transform(wp.vec3(-0.5, 0.0, 0.0), wp.quat_identity())
+        y_axis = wp.vec3(0.0, 1.0, 0.0)
+
+        builder = newton.ModelBuilder(gravity=-10.0, up_axis=newton.Axis.Z)
+
+        b1 = builder.add_link(
+            xform=identity_xform,
+            mass=25.0,
+            inertia=self.I_UNIT,
+            com=wp.vec3(0.0, 0.0, 0.0),
+        )
+        j1 = builder.add_joint_revolute(
+            parent=-1,
+            child=b1,
+            axis=y_axis,
+            parent_xform=identity_xform,
+            child_xform=neg_half,
+        )
+        b2 = builder.add_link(
+            xform=identity_xform,
+            mass=25.0,
+            inertia=self.I_UNIT,
+            com=wp.vec3(0.0, 0.0, 0.0),
+        )
+        j2 = builder.add_joint_revolute(
+            parent=b1,
+            child=b2,
+            axis=y_axis,
+            parent_xform=pos_half,
+            child_xform=neg_half,
+        )
+        builder.add_articulation([j1, j2], label="double_pendulum")
+
+        model = builder.finalize(device=self.device)
+
+        cases = [
+            (0.0, [[64.5, 19.75], [19.75, 7.25]]),
+            (np.pi / 2.0, [[39.5, 7.25], [7.25, 7.25]]),
+            (np.pi, [[14.5, -5.25], [-5.25, 7.25]]),
+        ]
+
+        for q2, expected in cases:
+            with self.subTest(q2=q2):
+                state = model.state()
+                joint_q = state.joint_q.numpy()
+                joint_q[:] = (0.7, q2)  # q1 arbitrary; M is q1-independent
+                state.joint_q.assign(joint_q)
+                newton.eval_fk(model, state.joint_q, state.joint_qd, state)
+
+                M = newton.eval_mass_matrix(model, state).numpy()[0, :2, :2]
+                np.testing.assert_allclose(M, expected, atol=1e-3, rtol=1e-5)
 
 
 class TestGravCompForceCPU(TestGravCompForce, unittest.TestCase):
