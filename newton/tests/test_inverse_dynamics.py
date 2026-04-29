@@ -1292,7 +1292,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 )
 
 
-class TestCoriolisCompensationForce(TestInverseDynamicsBase):
+class TestCoriolisCompForce(TestInverseDynamicsBase):
     """Coriolis-compensation-force tests for the two-link pendulum harness."""
 
     def test_coriolis_zero_at_rest(self):
@@ -1324,6 +1324,96 @@ class TestCoriolisCompensationForce(TestInverseDynamicsBase):
 
         tau = inverse_dynamics.coriolis_compensation_force.numpy()
         np.testing.assert_allclose(tau, np.zeros_like(tau), atol=1e-6)
+
+    def test_coriolis_double_pendulum_matches_analytical(self):
+        """C(q, q_dot)*q_dot for a planar 3D double pendulum matches PhysX's analytical reference values.
+
+        Replicates the PhysX ``CoriolisAndCentrifugalCompensationForces``
+        unit test in
+        ``physics/physx/test/unittests/Articulation/src/ArticulationInverseDynamics.cpp``:
+        a fixed-base double pendulum with two revolute joints both about
+        world +Y, link length 1.0, and a 25 kg point mass at each link
+        midpoint. At ``q = (0, pi/2)`` link 1 points along world +X and
+        link 2 along world -Z. Because both joint axes lie along world Y,
+        motion is planar in the X-Z plane and the Coriolis term collapses
+        to a closed form that is independent of the link rotational
+        inertias:
+
+            c_1 = -m * L_1 * l_2c * sin(q2) * (2 * q_dot1 * q_dot2 + q_dot2^2)
+            c_2 =  m * L_1 * l_2c * sin(q2) * q_dot1^2
+
+        With ``m = 25``, ``L_1 = 1``, ``l_2c = 0.5`` the prefactor is 12.5,
+        which yields the two PhysX-quoted reference cases below.
+        """
+        identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
+        pos_half = wp.transform(wp.vec3(0.5, 0.0, 0.0), wp.quat_identity())
+        neg_half = wp.transform(wp.vec3(-0.5, 0.0, 0.0), wp.quat_identity())
+        y_axis = wp.vec3(0.0, 1.0, 0.0)
+
+        builder = newton.ModelBuilder(gravity=-10.0, up_axis=newton.Axis.Z)
+
+        b1 = builder.add_link(
+            xform=identity_xform,
+            mass=25.0,
+            inertia=self.I_UNIT,
+            com=wp.vec3(0.0, 0.0, 0.0),
+        )
+        j1 = builder.add_joint_revolute(
+            parent=-1,
+            child=b1,
+            axis=y_axis,
+            parent_xform=identity_xform,
+            child_xform=neg_half,
+        )
+        b2 = builder.add_link(
+            xform=identity_xform,
+            mass=25.0,
+            inertia=self.I_UNIT,
+            com=wp.vec3(0.0, 0.0, 0.0),
+        )
+        j2 = builder.add_joint_revolute(
+            parent=b1,
+            child=b2,
+            axis=y_axis,
+            parent_xform=pos_half,
+            child_xform=neg_half,
+        )
+        builder.add_articulation([j1, j2], label="double_pendulum")
+
+        model = builder.finalize(device=self.device)
+        inverse_dynamics = model.inverse_dynamics()
+
+        # Both states share q = (0, pi/2); only q_dot varies. Expected values are
+        # +C(q, q_dot) * q_dot per the PhysX convention.
+        cases = [
+            ((1.5, 0.0), (0.0, 28.125)),
+            ((1.5, 1.5), (-84.375, 28.125)),
+        ]
+
+        for joint_qd_values, expected_physx in cases:
+            with self.subTest(joint_qd=joint_qd_values):
+                state = model.state()
+                joint_q = state.joint_q.numpy()
+                joint_q[:] = (0.0, np.pi / 2.0)
+                state.joint_q.assign(joint_q)
+                joint_qd = state.joint_qd.numpy()
+                joint_qd[:] = joint_qd_values
+                state.joint_qd.assign(joint_qd)
+                newton.eval_fk(model, state.joint_q, state.joint_qd, state)
+
+                newton.eval_inverse_dynamics(
+                    model,
+                    state,
+                    newton.InverseDynamics.EvalType.CORIOLIS_COMPENSATION_FORCE,
+                    inverse_dynamics,
+                )
+
+                # Newton's coriolis_compensation_force has the same sign
+                # convention as gravity_compensation_force (i.e. opposite
+                # of "force the user would apply to compensate"), so
+                # compare -tau against the PhysX values.
+                measured = inverse_dynamics.coriolis_compensation_force.numpy()
+                np.testing.assert_allclose(-measured, expected_physx, atol=1e-3, rtol=1e-5)
 
 
 class TestMassMatrix(TestInverseDynamicsBase):
@@ -1373,12 +1463,12 @@ class TestMassMatrixCUDA(TestMassMatrix, unittest.TestCase):
     device = wp.get_device("cuda:0") if wp.is_cuda_available() else None
 
 
-class TestCoriolisCompensationForceCPU(TestCoriolisCompensationForce, unittest.TestCase):
+class TestCoriolisCompForceCPU(TestCoriolisCompForce, unittest.TestCase):
     device = wp.get_device("cpu")
 
 
 @unittest.skipUnless(wp.is_cuda_available(), "CUDA not available")
-class TestCoriolisCompensationForceCUDA(TestCoriolisCompensationForce, unittest.TestCase):
+class TestCoriolisCompForceCUDA(TestCoriolisCompForce, unittest.TestCase):
     device = wp.get_device("cuda:0") if wp.is_cuda_available() else None
 
 
