@@ -158,6 +158,151 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         self.assertGreater(float(np.linalg.norm(g)), 1e-6)
         self.assertGreater(float(np.linalg.norm(c)), 1e-6)
 
+    def test_mass_matrix_force(self):
+        """tau == M(q)*qddot for a fixed-base 3-link chain with zero gravity 
+        and zero dof velocity.
+        Compute the mass matrix H(q) of an articulation and use that to compute
+        the total compensation force H(q)*qddot.  Apply the total compensation force
+        for 1 sim step and measure qddot by differentiating qdot wrt time. This 
+        should produce the original qddot used to compute the compensation force.
+        """
+        # Mass and inertia of a uniform-density 4x2x2 box at density 1:
+        # m = density * volume = 1 * 4 * 2 * 2 = 16
+        # I = (1/12) * m * diag(b^2 + c^2, a^2 + c^2, a^2 + b^2)
+        #   = (1/12) * 16 * diag(8, 20, 20)
+        #   = diag(32/3, 80/3, 80/3)
+        box_mass = 16.0
+        box_inertia = wp.mat33(
+            32.0 / 3.0, 0.0, 0.0,
+            0.0, 80.0 / 3.0, 0.0,
+            0.0, 0.0, 80.0 / 3.0,
+        )
+
+        identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
+        pos_two = wp.transform(wp.vec3(2.0, 0.0, 0.0), wp.quat_identity())
+        neg_two = wp.transform(wp.vec3(-2.0, 0.0, 0.0), wp.quat_identity())
+        z_axis = wp.vec3(0.0, 0.0, 1.0)
+
+        builder = newton.ModelBuilder(gravity=0.0, up_axis=newton.Axis.Z)
+
+        link0 = builder.add_link(
+            xform=identity_xform,
+            mass=box_mass,
+            inertia=box_inertia,
+            com=wp.vec3(0.0, 0.0, 0.0),
+        )
+        j0 = builder.add_joint_fixed(
+            parent=-1,
+            child=link0,
+            parent_xform=identity_xform,
+            child_xform=identity_xform,
+        )
+        link1 = builder.add_link(
+            xform=identity_xform,
+            mass=box_mass,
+            inertia=box_inertia,
+            com=wp.vec3(0.0, 0.0, 0.0),
+        )
+        j1 = builder.add_joint_revolute(
+            parent=link0,
+            child=link1,
+            axis=z_axis,
+            parent_xform=pos_two,
+            child_xform=neg_two,
+            target_ke=0.0,
+            target_kd=0.0,
+            friction=0.0,
+        )
+        link2 = builder.add_link(
+            xform=identity_xform,
+            mass=box_mass,
+            inertia=box_inertia,
+            com=wp.vec3(0.0, 0.0, 0.0),
+        )
+        j2 = builder.add_joint_revolute(
+            parent=link1,
+            child=link2,
+            axis=z_axis,
+            parent_xform=pos_two,
+            child_xform=neg_two,
+            target_ke=0.0,
+            target_kd=0.0,
+            friction=0.0,
+        )
+        builder.add_articulation([j0, j1, j2], label="three_link_chain")
+
+        model = builder.finalize(device=self.device)
+        state = model.state()
+        state_next = model.state()
+        control = model.control()
+        contacts = model.contacts()
+        inverse_dynamics = model.inverse_dynamics()
+        solver = newton.solvers.SolverMuJoCo(model)
+        dt = 1e-4
+
+        self.assertEqual(model.body_count, 3)
+        self.assertEqual(model.joint_dof_count, 2)
+
+        initial_joint_positions = [
+            (0.0, 0.0),
+            (0.3, 0.5),
+            (np.pi / 4.0, -np.pi / 3.0),
+            (np.pi / 2.0, np.pi / 2.0),
+        ]
+        initial_joint_speeds = [
+            (0.0, 0.0),
+            (0.0, 0.0),
+            (0.0, 0.0),
+            (0.0, 0.0),
+        ]
+        # The first entry matches PhysX's MassMatrixForce (qddot[i] = 0.02 * i for
+        # joint i in [1, 2]); the others vary magnitudes and signs to broaden coverage.
+        initial_joint_accelerations = [
+            (0.02, 0.04),
+            (0.5, -0.3),
+            (1.0, 1.0),
+            (-0.7, 0.2),
+        ]
+
+        for joint_q_values, joint_qd_values, joint_qdd_values in zip(
+            initial_joint_positions, initial_joint_speeds, initial_joint_accelerations
+        ):
+            with self.subTest(joint_q=joint_q_values, joint_qd=joint_qd_values, joint_qdd=joint_qdd_values):
+                joint_q = state.joint_q.numpy()
+                joint_q[:] = joint_q_values
+                state.joint_q.assign(joint_q)
+                joint_qd = state.joint_qd.numpy()
+                joint_qd[:] = joint_qd_values
+                state.joint_qd.assign(joint_qd)
+                newton.eval_fk(model, state.joint_q, state.joint_qd, state)
+
+                # Manipulator equation: tau = M(q)*qddot + C(q,qdot)*qdot + g(q).
+                # With gravity = 0 and joint_qd = 0 the compensation forces are zero,
+                # but we feed them through the full helper anyway to exercise the path.
+                newton.eval_inverse_dynamics(
+                    model, state, newton.InverseDynamics.EvalType.ALL, inverse_dynamics
+                )
+                qddot_target = np.asarray(joint_qdd_values, dtype=np.float32)
+                qddot = wp.array(qddot_target, dtype=wp.float32, device=self.device)
+                newton.eval_inverse_dynamics_force(
+                    model,
+                    inverse_dynamics.mass_matrix,
+                    qddot,
+                    inverse_dynamics.coriolis_compensation_force,
+                    inverse_dynamics.gravity_compensation_force,
+                    inverse_dynamics.tau,
+                )
+
+                control.joint_f.assign(inverse_dynamics.tau)
+
+                solver.step(state, state_next, control, contacts, dt)
+
+                # Recover qddot from the velocity change. With joint_qd = 0 initially,
+                # this is state_next.joint_qd / dt up to integrator truncation error.
+                qd_initial = np.asarray(joint_qd_values, dtype=np.float32)
+                qddot_observed = (state_next.joint_qd.numpy() - qd_initial) / dt
+                np.testing.assert_allclose(qddot_observed, qddot_target, atol=1e-3, rtol=1e-3)
+
 
 class TestGravCompForce(TestInverseDynamicsBase):
     """Gravity-compensation-force tests for the two-link pendulum harness."""

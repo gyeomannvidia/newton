@@ -87,6 +87,10 @@ class InverseDynamics:
         )
         """Generalized Coriolis + centrifugal compensation force C(q, q_dot) [N or N·m, depending on joint type], shape (joint_dof_count,), dtype float."""
 
+        self.tau: wp.array[wp.float32] = wp.zeros(joint_dof_count, dtype=wp.float32, device=device)
+        """Inverse-dynamics joint force ``tau = M(q)*qddot + C(q, q_dot)*q_dot + g(q)`` [N or N·m, depending on joint type], shape (joint_dof_count,), dtype float.
+        Typically populated by :func:`~newton.eval_inverse_dynamics_force` from the other buffers in this container plus a user-supplied ``qddot``."""
+
 
 def _rnea_compensation_pass(
     model: Model,
