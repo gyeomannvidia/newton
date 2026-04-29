@@ -166,70 +166,91 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         for 1 sim step and measure qddot by differentiating qdot wrt time. This 
         should produce the original qddot used to compute the compensation force.
         """
-        # Mass and inertia of a uniform-density 4x2x2 box at density 1:
-        # m = density * volume = 1 * 4 * 2 * 2 = 16
-        # I = (1/12) * m * diag(b^2 + c^2, a^2 + c^2, a^2 + b^2)
-        #   = (1/12) * 16 * diag(8, 20, 20)
-        #   = diag(32/3, 80/3, 80/3)
-        box_mass = 16.0
-        box_inertia = wp.mat33(
-            32.0 / 3.0, 0.0, 0.0,
-            0.0, 80.0 / 3.0, 0.0,
-            0.0, 0.0, 80.0 / 3.0,
-        )
+        # Each articulation is a chain of three uniform-density 4x2x2 boxes;
+        # the per-articulation density (and so the link mass and inertia) varies
+        # to exercise the per-articulation kernel paths with different M(q).
+        # I_link = (1/12) * mass * diag(b^2 + c^2, a^2 + c^2, a^2 + b^2)
+        #        = (1/12) * mass * diag(8, 20, 20) for full extents (4, 2, 2).
+        def box_inertia(mass: float) -> wp.mat33:
+            return wp.mat33(
+                mass * 8.0 / 12.0, 0.0, 0.0,
+                0.0, mass * 20.0 / 12.0, 0.0,
+                0.0, 0.0, mass * 20.0 / 12.0,
+            )
 
         identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
         pos_two = wp.transform(wp.vec3(2.0, 0.0, 0.0), wp.quat_identity())
         neg_two = wp.transform(wp.vec3(-2.0, 0.0, 0.0), wp.quat_identity())
         z_axis = wp.vec3(0.0, 0.0, 1.0)
 
-        builder = newton.ModelBuilder(gravity=0.0, up_axis=newton.Axis.Z)
+        def build_articulation(mass: float, inertia: wp.mat33) -> newton.ModelBuilder:
+            b = newton.ModelBuilder(gravity=0.0, up_axis=newton.Axis.Z)
+            link0 = b.add_link(
+                xform=identity_xform,
+                mass=mass,
+                inertia=inertia,
+                com=wp.vec3(0.0, 0.0, 0.0),
+            )
+            j0 = b.add_joint_fixed(
+                parent=-1,
+                child=link0,
+                parent_xform=identity_xform,
+                child_xform=identity_xform,
+            )
+            link1 = b.add_link(
+                xform=identity_xform,
+                mass=mass,
+                inertia=inertia,
+                com=wp.vec3(0.0, 0.0, 0.0),
+            )
+            j1 = b.add_joint_revolute(
+                parent=link0,
+                child=link1,
+                axis=z_axis,
+                parent_xform=pos_two,
+                child_xform=neg_two,
+                target_ke=0.0,
+                target_kd=0.0,
+                friction=0.0,
+            )
+            link2 = b.add_link(
+                xform=identity_xform,
+                mass=mass,
+                inertia=inertia,
+                com=wp.vec3(0.0, 0.0, 0.0),
+            )
+            j2 = b.add_joint_revolute(
+                parent=link1,
+                child=link2,
+                axis=z_axis,
+                parent_xform=pos_two,
+                child_xform=neg_two,
+                target_ke=0.0,
+                target_kd=0.0,
+                friction=0.0,
+            )
+            b.add_articulation([j0, j1, j2], label="three_link_chain")
+            return b
 
-        link0 = builder.add_link(
-            xform=identity_xform,
-            mass=box_mass,
-            inertia=box_inertia,
-            com=wp.vec3(0.0, 0.0, 0.0),
-        )
-        j0 = builder.add_joint_fixed(
-            parent=-1,
-            child=link0,
-            parent_xform=identity_xform,
-            child_xform=identity_xform,
-        )
-        link1 = builder.add_link(
-            xform=identity_xform,
-            mass=box_mass,
-            inertia=box_inertia,
-            com=wp.vec3(0.0, 0.0, 0.0),
-        )
-        j1 = builder.add_joint_revolute(
-            parent=link0,
-            child=link1,
-            axis=z_axis,
-            parent_xform=pos_two,
-            child_xform=neg_two,
-            target_ke=0.0,
-            target_kd=0.0,
-            friction=0.0,
-        )
-        link2 = builder.add_link(
-            xform=identity_xform,
-            mass=box_mass,
-            inertia=box_inertia,
-            com=wp.vec3(0.0, 0.0, 0.0),
-        )
-        j2 = builder.add_joint_revolute(
-            parent=link1,
-            child=link2,
-            axis=z_axis,
-            parent_xform=pos_two,
-            child_xform=neg_two,
-            target_ke=0.0,
-            target_kd=0.0,
-            friction=0.0,
-        )
-        builder.add_articulation([j0, j1, j2], label="three_link_chain")
+        num_worlds = 2
+        num_arts_per_world = 2
+        num_arts = num_worlds * num_arts_per_world
+        dofs_per_art = 2
+
+        # Per-articulation link mass; first matches PhysX's MassMatrixForce
+        # (density 1 * volume 16 = 16). Inertia tracks mass for the same shape.
+        per_articulation_masses = [16.0, 32.0, 8.0, 24.0]
+        assert len(per_articulation_masses) == num_arts
+
+        builder = newton.ModelBuilder(gravity=0.0, up_axis=newton.Axis.Z)
+        art_idx = 0
+        for _ in range(num_worlds):
+            world_builder = newton.ModelBuilder(gravity=0.0, up_axis=newton.Axis.Z)
+            for _ in range(num_arts_per_world):
+                m = per_articulation_masses[art_idx]
+                world_builder.add_builder(build_articulation(m, box_inertia(m)))
+                art_idx += 1
+            builder.add_world(world_builder)
 
         model = builder.finalize(device=self.device)
         state = model.state()
@@ -240,8 +261,8 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         solver = newton.solvers.SolverMuJoCo(model)
         dt = 1e-4
 
-        self.assertEqual(model.body_count, 3)
-        self.assertEqual(model.joint_dof_count, 2)
+        self.assertEqual(model.body_count, 3 * num_arts)
+        self.assertEqual(model.joint_dof_count, dofs_per_art * num_arts)
 
         initial_joint_positions = [
             (0.0, 0.0),
@@ -268,11 +289,16 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
             initial_joint_positions, initial_joint_speeds, initial_joint_accelerations
         ):
             with self.subTest(joint_q=joint_q_values, joint_qd=joint_qd_values, joint_qdd=joint_qdd_values):
+                # Same per-articulation values applied to every articulation across worlds.
+                joint_q_full = np.tile(joint_q_values, num_arts).astype(np.float32)
+                joint_qd_full = np.tile(joint_qd_values, num_arts).astype(np.float32)
+                qddot_target = np.tile(joint_qdd_values, num_arts).astype(np.float32)
+
                 joint_q = state.joint_q.numpy()
-                joint_q[:] = joint_q_values
+                joint_q[:] = joint_q_full
                 state.joint_q.assign(joint_q)
                 joint_qd = state.joint_qd.numpy()
-                joint_qd[:] = joint_qd_values
+                joint_qd[:] = joint_qd_full
                 state.joint_qd.assign(joint_qd)
                 newton.eval_fk(model, state.joint_q, state.joint_qd, state)
 
@@ -282,7 +308,6 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
                 newton.eval_inverse_dynamics(
                     model, state, newton.InverseDynamics.EvalType.ALL, inverse_dynamics
                 )
-                qddot_target = np.asarray(joint_qdd_values, dtype=np.float32)
                 qddot = wp.array(qddot_target, dtype=wp.float32, device=self.device)
                 newton.eval_inverse_dynamics_force(
                     model,
@@ -299,8 +324,7 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
 
                 # Recover qddot from the velocity change. With joint_qd = 0 initially,
                 # this is state_next.joint_qd / dt up to integrator truncation error.
-                qd_initial = np.asarray(joint_qd_values, dtype=np.float32)
-                qddot_observed = (state_next.joint_qd.numpy() - qd_initial) / dt
+                qddot_observed = (state_next.joint_qd.numpy() - joint_qd_full) / dt
                 np.testing.assert_allclose(qddot_observed, qddot_target, atol=1e-3, rtol=1e-3)
 
 
