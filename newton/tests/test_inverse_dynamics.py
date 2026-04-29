@@ -1416,35 +1416,23 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
                 np.testing.assert_allclose(-measured, expected_physx, atol=1e-3, rtol=1e-5)
 
     def test_coriolis_radial_slider_matches_analytical(self):
-        """C(q, q_dot)*q_dot for a rotating radial slider matches the closed-form values.
+        """C(q, q_dot) for a rotating radial slider matches the closed-form values.
 
-        The classic Coriolis textbook example: a fixed-base 2-DOF
-        articulation where Link 0 is attached to the world by a revolute
-        joint about world +Z and Link 1 (the slider) is attached to
-        Link 0 by a prismatic joint along Link 0's local +X. Link 0 is
-        given a small but non-zero mass so the dominant translational
-        inertia comes from the slider (a 0.5 kg point mass on the
-        rotating axis). Drives and friction are disabled explicitly so
-        the only joint loads come from inertial coupling (the RNEA
-        compensation pass already zeroes these internally, but we make
-        the intent explicit at the model level).
-
-        With ``q = (theta, r)`` and ``q_dot = (omega, v_r)`` the slider
-        traces a circle of varying radius and the kinetic energy is
-        ``0.5 * m * (v_r^2 + r^2 * omega^2)``. The Coriolis term reduces
-        to:
+        Classic Coriolis textbook setup: a revolute joint about world
+        +Z carries an inner link, and a prismatic joint along that
+        link's local +X carries a 0.5 kg point-mass slider. With
+        ``q = (theta, r)`` and ``q_dot = (omega, v_r)`` the slider
+        traces a circle of varying radius and the Coriolis term is:
 
             c_theta = 2 * m * r * omega * v_r   (Coriolis coupling)
             c_r     = -m * r * omega^2          (centrifugal pull)
 
-        ``theta`` is irrelevant because the system is rotationally
-        symmetric about world +Z. Link rotational inertia is irrelevant
-        too: the angular velocity vector is purely along +Z, so only
-        each link's ``I[2, 2]`` enters the kinetic energy, and that
-        component is invariant under rotations about Z, so it adds a
-        constant offset to ``M[0, 0]`` but contributes nothing to
-        ``dM/dq``. The outer loop sweeps three qualitatively different
-        link inertias (negligible, unit, and 100x unit) to confirm this.
+        Both formulas are independent of the link rotational inertias,
+        because the angular velocity vector is purely along +Z and
+        ``I[2, 2]`` (i.e. ``Izz``, the moment of inertia about Z) is
+        invariant under rotations about Z. The outer loop sweeps three
+        qualitatively different link inertias (negligible, unit, 100x
+        unit) to confirm this.
         """
         identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
         z_axis = wp.vec3(0.0, 0.0, 1.0)
@@ -1511,6 +1499,101 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
                 state.joint_q.assign(joint_q)
                 joint_qd = state.joint_qd.numpy()
                 joint_qd[:] = (omega, v_r)
+                state.joint_qd.assign(joint_qd)
+                newton.eval_fk(model, state.joint_q, state.joint_qd, state)
+
+                newton.eval_inverse_dynamics(
+                    model,
+                    state,
+                    newton.InverseDynamics.EvalType.CORIOLIS_COMPENSATION_FORCE,
+                    inverse_dynamics,
+                )
+
+                measured = inverse_dynamics.coriolis_compensation_force.numpy()
+                np.testing.assert_allclose(-measured, expected, atol=1e-4, rtol=1e-5)
+
+    def test_coriolis_anisotropic_gimbal_independent_of_mass(self):
+        """C(q, q_dot) for a 2-DOF gimbal depends on rotational inertia but not on link mass.
+
+        Two revolute joints (about world +Z, then the inner link's
+        local +Y) share the world origin as their pivot, with both
+        link CoMs at the origin. Nothing translates as the joints
+        move, so translational kinetic energy vanishes and mass drops
+        out of ``M(q)`` entirely. With the outer-link body-frame
+        inertia set to ``diag(Ix, Iy, Iz)``, the closed form is:
+
+            c_1 = (Ix - Iz) * sin(2*q2) * q_dot1 * q_dot2
+            c_2 = -0.5 * (Ix - Iz) * sin(2*q2) * q_dot1^2
+
+        The outer loop sweeps two qualitatively different link masses
+        to confirm empirically that ``C`` does not depend on mass.
+        """
+        identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
+        z_axis = wp.vec3(0.0, 0.0, 1.0)
+        y_axis = wp.vec3(0.0, 1.0, 0.0)
+
+        Ix = 2.0
+        Iy = 1.0
+        Iz = 0.5
+        outer_inertia = wp.mat33(Ix, 0.0, 0.0, 0.0, Iy, 0.0, 0.0, 0.0, Iz)
+
+        q1 = 0.0  # arbitrary; system is rotationally symmetric about +Z
+        q2 = np.pi / 4.0
+        qd1 = 1.0
+        qd2 = 1.0
+
+        expected = (
+            (Ix - Iz) * np.sin(2.0 * q2) * qd1 * qd2,
+            -0.5 * (Ix - Iz) * np.sin(2.0 * q2) * qd1 * qd1,
+        )
+
+        for link_mass in (0.5, 50.0):
+            with self.subTest(mass=link_mass):
+                builder = newton.ModelBuilder(gravity=0.0, up_axis=newton.Axis.Z)
+
+                inner = builder.add_link(
+                    xform=identity_xform,
+                    mass=link_mass,
+                    inertia=self.I_UNIT,
+                    com=wp.vec3(0.0, 0.0, 0.0),
+                )
+                j1 = builder.add_joint_revolute(
+                    parent=-1,
+                    child=inner,
+                    axis=z_axis,
+                    parent_xform=identity_xform,
+                    child_xform=identity_xform,
+                    target_ke=0.0,
+                    target_kd=0.0,
+                    friction=0.0,
+                )
+                outer = builder.add_link(
+                    xform=identity_xform,
+                    mass=link_mass,
+                    inertia=outer_inertia,
+                    com=wp.vec3(0.0, 0.0, 0.0),
+                )
+                j2 = builder.add_joint_revolute(
+                    parent=inner,
+                    child=outer,
+                    axis=y_axis,
+                    parent_xform=identity_xform,
+                    child_xform=identity_xform,
+                    target_ke=0.0,
+                    target_kd=0.0,
+                    friction=0.0,
+                )
+                builder.add_articulation([j1, j2], label="anisotropic_gimbal")
+
+                model = builder.finalize(device=self.device)
+                inverse_dynamics = model.inverse_dynamics()
+
+                state = model.state()
+                joint_q = state.joint_q.numpy()
+                joint_q[:] = (q1, q2)
+                state.joint_q.assign(joint_q)
+                joint_qd = state.joint_qd.numpy()
+                joint_qd[:] = (qd1, qd2)
                 state.joint_qd.assign(joint_qd)
                 newton.eval_fk(model, state.joint_q, state.joint_qd, state)
 
