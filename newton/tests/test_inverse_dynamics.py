@@ -183,7 +183,7 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         neg_two = wp.transform(wp.vec3(-2.0, 0.0, 0.0), wp.quat_identity())
         z_axis = wp.vec3(0.0, 0.0, 1.0)
 
-        def build_articulation(mass: float, inertia: wp.mat33) -> newton.ModelBuilder:
+        def build_articulation(mass: float, inertia: wp.mat33, floating_base: bool) -> newton.ModelBuilder:
             b = newton.ModelBuilder(gravity=0.0, up_axis=newton.Axis.Z)
             link0 = b.add_link(
                 xform=identity_xform,
@@ -191,12 +191,20 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
                 inertia=inertia,
                 com=wp.vec3(0.0, 0.0, 0.0),
             )
-            j0 = b.add_joint_fixed(
-                parent=-1,
-                child=link0,
-                parent_xform=identity_xform,
-                child_xform=identity_xform,
-            )
+            if floating_base:
+                j0 = b.add_joint_free(
+                    parent=-1,
+                    child=link0,
+                    parent_xform=identity_xform,
+                    child_xform=identity_xform,
+                )
+            else:
+                j0 = b.add_joint_fixed(
+                    parent=-1,
+                    child=link0,
+                    parent_xform=identity_xform,
+                    child_xform=identity_xform,
+                )
             link1 = b.add_link(
                 xform=identity_xform,
                 mass=mass,
@@ -235,7 +243,12 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         num_worlds = 2
         num_arts_per_world = 2
         num_arts = num_worlds * num_arts_per_world
-        dofs_per_art = 2
+
+        # Each world has one fixed-root articulation and one floating-base one.
+        # The floating-base form contributes 6 root DOFs (3 linear, 3 angular)
+        # in joint_qd plus 7 root coords (3 pos, 4 quat) in joint_q.
+        floating_flags = [False, True, False, True]
+        assert len(floating_flags) == num_arts
 
         # Per-articulation link mass; first matches PhysX's MassMatrixForce
         # (density 1 * volume 16 = 16). Inertia tracks mass for the same shape.
@@ -248,7 +261,7 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
             world_builder = newton.ModelBuilder(gravity=0.0, up_axis=newton.Axis.Z)
             for _ in range(num_arts_per_world):
                 m = per_articulation_masses[art_idx]
-                world_builder.add_builder(build_articulation(m, box_inertia(m)))
+                world_builder.add_builder(build_articulation(m, box_inertia(m), floating_flags[art_idx]))
                 art_idx += 1
             builder.add_world(world_builder)
 
@@ -261,8 +274,11 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         solver = newton.solvers.SolverMuJoCo(model)
         dt = 1e-4
 
+        # 2 fixed-root articulations contribute 2 DOFs each; 2 floating-base
+        # articulations contribute 6 root + 2 internal = 8 DOFs each.
+        expected_dofs = sum(8 if f else 2 for f in floating_flags)
         self.assertEqual(model.body_count, 3 * num_arts)
-        self.assertEqual(model.joint_dof_count, dofs_per_art * num_arts)
+        self.assertEqual(model.joint_dof_count, expected_dofs)
 
         initial_joint_positions = [
             (0.0, 0.0),
@@ -285,14 +301,33 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
             (-0.7, 0.2),
         ]
 
+        # Floating-base root state used for every test case. The base sits at the
+        # world origin with identity orientation; root velocity is zero (so the
+        # manipulator equation collapses to tau = M*qddot for these DOFs too).
+        # Root accelerations are arbitrary non-zero values so the floating root
+        # exercises non-trivial M(q)*qddot rows.
+        floating_root_q = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+        floating_root_qd = (0.0,) * 6
+        floating_root_qdd = (0.05, -0.1, 0.15, 0.2, -0.25, 0.3)
+
         for joint_q_values, joint_qd_values, joint_qdd_values in zip(
             initial_joint_positions, initial_joint_speeds, initial_joint_accelerations
         ):
             with self.subTest(joint_q=joint_q_values, joint_qd=joint_qd_values, joint_qdd=joint_qdd_values):
-                # Same per-articulation values applied to every articulation across worlds.
-                joint_q_full = np.tile(joint_q_values, num_arts).astype(np.float32)
-                joint_qd_full = np.tile(joint_qd_values, num_arts).astype(np.float32)
-                qddot_target = np.tile(joint_qdd_values, num_arts).astype(np.float32)
+                q_pieces: list[float] = []
+                qd_pieces: list[float] = []
+                qdd_pieces: list[float] = []
+                for is_floating in floating_flags:
+                    if is_floating:
+                        q_pieces.extend(floating_root_q)
+                        qd_pieces.extend(floating_root_qd)
+                        qdd_pieces.extend(floating_root_qdd)
+                    q_pieces.extend(joint_q_values)
+                    qd_pieces.extend(joint_qd_values)
+                    qdd_pieces.extend(joint_qdd_values)
+                joint_q_full = np.asarray(q_pieces, dtype=np.float32)
+                joint_qd_full = np.asarray(qd_pieces, dtype=np.float32)
+                qddot_target = np.asarray(qdd_pieces, dtype=np.float32)
 
                 joint_q = state.joint_q.numpy()
                 joint_q[:] = joint_q_full
@@ -303,10 +338,12 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
                 newton.eval_fk(model, state.joint_q, state.joint_qd, state)
 
                 # Manipulator equation: tau = M(q)*qddot + C(q,qdot)*qdot + g(q).
-                # With gravity = 0 and joint_qd = 0 the compensation forces are zero,
-                # but we feed them through the full helper anyway to exercise the path.
+                # With gravity = 0 and joint_qd = 0 the Coriolis and gravity
+                # compensation forces are identically zero, so we only compute
+                # the mass matrix and rely on the inverse_dynamics buffers'
+                # zero-initialized coriolis_compensation_force / gravity_compensation_force.
                 newton.eval_inverse_dynamics(
-                    model, state, newton.InverseDynamics.EvalType.ALL, inverse_dynamics
+                    model, state, newton.InverseDynamics.EvalType.MASS_MATRIX, inverse_dynamics
                 )
                 qddot = wp.array(qddot_target, dtype=wp.float32, device=self.device)
                 newton.eval_inverse_dynamics_force(
