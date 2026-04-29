@@ -9,7 +9,6 @@ from .control import Control
 from .enums import (
     BodyFlags,
     EqType,
-    InverseDynamicsEvalType,
     JointTargetMode,
     JointType,
 )
@@ -24,7 +23,6 @@ __all__ = [
     "Control",
     "EqType",
     "InverseDynamics",
-    "InverseDynamicsEvalType",
     "JointTargetMode",
     "JointType",
     "Model",

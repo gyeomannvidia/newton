@@ -126,7 +126,7 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
     """Manipulator-equation tests covering combined inverse-dynamics outputs."""
 
     def test_eval_all_populates_every_buffer(self):
-        """EVAL_ALL must write the mass matrix and both compensation forces in one call.
+        """EvalType.ALL must write the mass matrix and both compensation forces in one call.
 
         Uses a floating base so the articulation has multi-DOF coupling; a
         fixed root with a single revolute DOF has identically-zero Coriolis
@@ -154,7 +154,7 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         state.joint_qd.assign(joint_qd)
 
         inverse_dynamics = model.inverse_dynamics()
-        newton.eval_inverse_dynamics(model, state, newton.InverseDynamicsEvalType.EVAL_ALL, inverse_dynamics)
+        newton.eval_inverse_dynamics(model, state, newton.InverseDynamics.EvalType.ALL, inverse_dynamics)
 
         H = inverse_dynamics.mass_matrix.numpy()
         g = inverse_dynamics.gravity_compensation_force.numpy()
@@ -237,12 +237,10 @@ class TestGravCompForce(TestInverseDynamicsBase):
         # caller's link_coms layout must agree.
         self.assertEqual(num_links_per_articulation, 2)
 
-        # Each articulation contributes 8 DOFs if floating (3 base position +
-        # 4 base quaternion + 1 internal q) or 1 DOF if fixed (just the
-        # internal q). Catching length mismatches here gives a clear error
-        # rather than letting an off-by-one in expected_grav_comp_forces
-        # silently shift every row that follows the typo.
-        expected_total_dofs = sum(8 if floating else 1 for row in is_floating_base for floating in row)
+        # Each articulation contributes 7 DOFs if floating (6 free-joint
+        # DOFs + 1 internal) or 1 DOF if fixed. G(q) and
+        # expected_grav_comp_forces are sized by total DOF count.
+        expected_total_dofs = sum(7 if floating else 1 for row in is_floating_base for floating in row)
         if len(expected_grav_comp_forces) != expected_total_dofs:
             raise ValueError(
                 f"expected_grav_comp_forces has length {len(expected_grav_comp_forces)}, "
@@ -297,7 +295,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
         newton.eval_inverse_dynamics(
             model=model,
             state=state,
-            eval_type=newton.InverseDynamicsEvalType.EVAL_GRAVITY_COMPENSATION_FORCE,
+            eval_type=newton.InverseDynamics.EvalType.GRAVITY_COMPENSATION_FORCE,
             inverse_dynamics=inverse_dynamics,
         )
 
@@ -333,7 +331,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
             newton.eval_inverse_dynamics(
                 model,
                 state,
-                newton.InverseDynamicsEvalType.EVAL_GRAVITY_COMPENSATION_FORCE,
+                newton.InverseDynamics.EvalType.GRAVITY_COMPENSATION_FORCE,
                 inverse_dynamics,
             )
 
@@ -370,7 +368,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
             newton.eval_inverse_dynamics(
                 model,
                 state,
-                newton.InverseDynamicsEvalType.EVAL_GRAVITY_COMPENSATION_FORCE,
+                newton.InverseDynamics.EvalType.GRAVITY_COMPENSATION_FORCE,
                 inverse_dynamics,
             )
 
@@ -889,7 +887,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
 
         expected_grav_comp_forces = [
             20.0,  # World 0, fixed root, 1 dof
-            0.0,   # World 0, floating root, 6+1 dofs
+            0.0,  # World 0, floating root, 6+1 dofs
             70.0,
             0.0,
             0.0,
@@ -897,7 +895,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
             15.0,
             40.0,
             60.0,  # World 1, fixed root, 1 dof
-            0.0,   # World 1, floating root, 6+1 dofs
+            0.0,  # World 1, floating root, 6+1 dofs
             150.0,
             0.0,
             0.0,
@@ -1023,6 +1021,34 @@ class TestGravCompForce(TestInverseDynamicsBase):
             )
 
     def test_two_link_revolute_grav_comp_force_from_jnt_frame(self):
+        """Sweeps the internal-joint ``child_xform`` to verify ``G(q)`` for
+        a revolute DOF tracks the moment arm of the distal link.
+
+        Each articulation has a revolute-about-+z internal joint with zero
+        body CoMs and identity ``parent_xform``. The per-articulation
+        ``child_xform`` translation (and one ``+y`` rotation) displaces the
+        distal link's origin — and therefore its CoM, since the body CoM
+        is zero — to a known world position at zero internal q. With
+        gravity along ``-y`` and revolute axis ``+z``, the internal-DOF
+        entry of ``-G(q)`` reduces to ``m_distal * |g| * x_world``.
+        Articulations whose displacement is along ``+/- y`` or ``+/- z``
+        therefore have a zero internal entry. Floating-root articulations
+        additionally carry ``M_total * |g|`` on the base linear-y entry
+        and ``r_com x (0, -g, 0)`` on the angular entries — confirming the
+        solver correctly picks up the joint-frame placement (translation
+        and rotation) on every block of the floating base, not just on
+        the internal DOF. Concretely:
+
+        - W0 a0 (fixed, child = (-4, 0, 0) identity): CoM at (4, 0, 0),
+          internal entry = ``2 * 10 * 4 = 80``.
+        - W0 a1 (floating, child = (0, -4, 0) rotated 90 deg about +y):
+          CoM at (0, 4, 0), internal entry zero, base linear-y = 30.
+        - W1 a0 (fixed, child = (0, -4, 0) identity): CoM at (0, 4, 0),
+          internal entry zero (CoM offset parallel to gravity).
+        - W1 a1 (floating, child = (0, 0, -4) identity): CoM at
+          (0, 0, 4), base angular-x = ``-80``, base linear-y = 30,
+          internal entry zero.
+        """
         gravity_vec = wp.vec3(0.0, -10.0, 0.0)
 
         is_floating_base = [
@@ -1251,7 +1277,7 @@ class TestGravCompForce(TestInverseDynamicsBase):
                 newton.eval_inverse_dynamics(
                     model=model,
                     state=state,
-                    eval_type=newton.InverseDynamicsEvalType.EVAL_GRAVITY_COMPENSATION_FORCE,
+                    eval_type=newton.InverseDynamics.EvalType.GRAVITY_COMPENSATION_FORCE,
                     inverse_dynamics=inverse_dynamics,
                 )
                 tau = inverse_dynamics.gravity_compensation_force.numpy()
@@ -1292,7 +1318,7 @@ class TestCoriolisCompensationForce(TestInverseDynamicsBase):
         newton.eval_inverse_dynamics(
             model,
             state,
-            newton.InverseDynamicsEvalType.EVAL_CORIOLIS_COMPENSATION_FORCE,
+            newton.InverseDynamics.EvalType.CORIOLIS_COMPENSATION_FORCE,
             inverse_dynamics,
         )
 
@@ -1304,7 +1330,7 @@ class TestMassMatrix(TestInverseDynamicsBase):
     """Mass-matrix tests for the two-link pendulum harness."""
 
     def test_mass_matrix_matches_eval_mass_matrix(self):
-        """eval_inverse_dynamics(EVAL_MASS_MATRIX) must match newton.eval_mass_matrix element-wise."""
+        """eval_inverse_dynamics(EvalType.MASS_MATRIX) must match newton.eval_mass_matrix element-wise."""
         builder = self._build_two_link_pendulum(
             gravity=wp.vec3(0.0, -9.81, 0.0),
             floating_base=False,
@@ -1324,7 +1350,7 @@ class TestMassMatrix(TestInverseDynamicsBase):
         H_reference = newton.eval_mass_matrix(model, state).numpy()
 
         inverse_dynamics = model.inverse_dynamics()
-        newton.eval_inverse_dynamics(model, state, newton.InverseDynamicsEvalType.EVAL_MASS_MATRIX, inverse_dynamics)
+        newton.eval_inverse_dynamics(model, state, newton.InverseDynamics.EvalType.MASS_MATRIX, inverse_dynamics)
 
         np.testing.assert_allclose(inverse_dynamics.mass_matrix.numpy(), H_reference, rtol=1e-6, atol=1e-6)
 

@@ -3,13 +3,13 @@
 
 from __future__ import annotations
 
+from enum import IntEnum
 from typing import TYPE_CHECKING
 
 import warp as wp
 
 from ..core.types import Devicelike
 from .articulation import eval_mass_matrix
-from .enums import InverseDynamicsEvalType
 
 if TYPE_CHECKING:
     from .model import Model
@@ -18,6 +18,28 @@ if TYPE_CHECKING:
 
 class InverseDynamics:
     """Inverse dynamics quantities for a batch of articulated rigid-body systems."""
+
+    class EvalType(IntEnum):
+        """Bitmask flags selecting which quantities :class:`~newton.InverseDynamics` should compute.
+
+        Flags can be combined with bitwise-or to request multiple quantities
+        simultaneously; :attr:`ALL` is the union of all individual flags.
+        """
+
+        MASS_MATRIX = 1 << 0
+        """Compute the joint-space mass matrix M(q)."""
+
+        GRAVITY_COMPENSATION_FORCE = 1 << 1
+        """Compute the gravity compensation generalized force G(q)."""
+
+        CORIOLIS_COMPENSATION_FORCE = 1 << 2
+        """Compute the Coriolis compensation generalized force C(q, q_dot)."""
+
+        COMPENSATION_FORCES = GRAVITY_COMPENSATION_FORCE | CORIOLIS_COMPENSATION_FORCE
+        """Compute the combined gravity and Coriolis compensation generalized forces G(q) + C(q, q_dot)."""
+
+        ALL = MASS_MATRIX | GRAVITY_COMPENSATION_FORCE | CORIOLIS_COMPENSATION_FORCE
+        """Compute the mass matrix and both compensation forces."""
 
     def __init__(
         self,
@@ -53,12 +75,17 @@ class InverseDynamics:
             dtype=wp.float32,
             device=device,
         )
+        """Joint-space mass matrix M(q) [kg, kg·m, or kg·m^2, depending on the joint types of the row/column DOFs], shape (articulation_count, max_dofs_per_articulation, max_dofs_per_articulation), dtype float."""
+
         self.gravity_compensation_force: wp.array[wp.float32] = wp.zeros(
             joint_dof_count, dtype=wp.float32, device=device
         )
+        """Generalized gravity compensation force G(q) [N or N·m, depending on joint type], shape (joint_dof_count,), dtype float."""
+
         self.coriolis_compensation_force: wp.array[wp.float32] = wp.zeros(
             joint_dof_count, dtype=wp.float32, device=device
         )
+        """Generalized Coriolis + centrifugal compensation force C(q, q_dot) [N or N·m, depending on joint type], shape (joint_dof_count,), dtype float."""
 
 
 def _rnea_compensation_pass(
@@ -199,7 +226,7 @@ def _rnea_compensation_pass(
     )
 
 
-def compute_gravity_compensation_force(
+def _compute_gravity_compensation_force(
     model: Model,
     state: State,
     inverse_dynamics: InverseDynamics,
@@ -220,7 +247,7 @@ def compute_gravity_compensation_force(
     )
 
 
-def compute_coriolis_compensation_force(
+def _compute_coriolis_compensation_force(
     model: Model,
     state: State,
     inverse_dynamics: InverseDynamics,
@@ -243,14 +270,16 @@ def compute_coriolis_compensation_force(
 def eval_inverse_dynamics(
     model: Model,
     state: State,
-    eval_type: InverseDynamicsEvalType,
+    eval_type: InverseDynamics.EvalType,
     inverse_dynamics: InverseDynamics,
 ) -> None:
     """Compute inverse dynamics quantities for an articulation.
 
     Depending on the flags in ``eval_type``, populates one or more of:
-    the joint-space mass matrix M(q), the gravity compensation force G(q),
-    and the Coriolis compensation force C(q, q_dot) into ``inverse_dynamics``.
+    the joint-space mass matrix M(q) [kg, kg·m, or kg·m^2, depending on the
+    joint types of the row/column DOFs], the gravity compensation force G(q)
+    [N or N·m, depending on joint type], and the Coriolis compensation force
+    C(q, q_dot) [N or N·m, depending on joint type] into ``inverse_dynamics``.
 
     Args:
         model: Model providing articulation topology and inertial parameters.
@@ -258,7 +287,7 @@ def eval_inverse_dynamics(
         eval_type: Bitmask selecting which quantities to compute.
         inverse_dynamics: Output container whose buffers are written in place.
     """
-    if eval_type & InverseDynamicsEvalType.EVAL_MASS_MATRIX:
+    if eval_type & InverseDynamics.EvalType.MASS_MATRIX:
         expected_shape = (model.articulation_count, model.max_dofs_per_articulation, model.max_dofs_per_articulation)
         if inverse_dynamics.mass_matrix.shape != expected_shape:
             raise ValueError(
@@ -267,8 +296,8 @@ def eval_inverse_dynamics(
             )
         eval_mass_matrix(model, state, H=inverse_dynamics.mass_matrix)
 
-    if eval_type & InverseDynamicsEvalType.EVAL_GRAVITY_COMPENSATION_FORCE:
-        compute_gravity_compensation_force(model, state, inverse_dynamics)
+    if eval_type & InverseDynamics.EvalType.GRAVITY_COMPENSATION_FORCE:
+        _compute_gravity_compensation_force(model, state, inverse_dynamics)
 
-    if eval_type & InverseDynamicsEvalType.EVAL_CORIOLIS_COMPENSATION_FORCE:
-        compute_coriolis_compensation_force(model, state, inverse_dynamics)
+    if eval_type & InverseDynamics.EvalType.CORIOLIS_COMPENSATION_FORCE:
+        _compute_coriolis_compensation_force(model, state, inverse_dynamics)
