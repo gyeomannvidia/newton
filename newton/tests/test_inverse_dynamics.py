@@ -255,8 +255,10 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         floating_flags = [False, True, False, True]
         assert len(floating_flags) == num_arts
 
-        # Per-articulation link mass; first matches PhysX's MassMatrixForce
-        # (density 1 * volume 16 = 16). Inertia tracks mass for the same shape.
+        # Per-articulation link mass. The first value (16) corresponds to a
+        # density-1 4x2x2 box (mass = density * volume); the others are arbitrary
+        # multiples and submultiples to vary M(q) across articulations. Inertia
+        # tracks mass for the same shape.
         per_articulation_masses = [16.0, 32.0, 8.0, 24.0]
         assert len(per_articulation_masses) == num_arts
 
@@ -295,8 +297,8 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         # of the manipulator equation contribute.
         internal_speed = (0.5, -0.3) if non_zero_initial_dof_velocities else (0.0, 0.0)
         initial_joint_speeds = [internal_speed] * 4
-        # The first entry matches PhysX's MassMatrixForce (qddot[i] = 0.02 * i for
-        # joint i in [1, 2]); the others vary magnitudes and signs to broaden coverage.
+        # Per-test-case internal-DOF accelerations. Magnitudes and signs vary so
+        # the assertion exercises both small and large q_ddot, including negatives.
         initial_joint_accelerations = [
             (0.02, 0.04),
             (0.5, -0.3),
@@ -1562,35 +1564,43 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
         np.testing.assert_allclose(tau, np.zeros_like(tau), atol=1e-6)
 
     def test_coriolis_double_pendulum_matches_analytical(self):
-        """C(q, q_dot)*q_dot for a planar 3D double pendulum matches PhysX's analytical reference values.
+        """C(q, q_dot)*q_dot for a planar 3D double pendulum matches its closed-form values.
 
-        Replicates the PhysX ``CoriolisAndCentrifugalCompensationForces``
-        unit test in
-        ``physics/physx/test/unittests/Articulation/src/ArticulationInverseDynamics.cpp``:
-        a fixed-base double pendulum with two revolute joints both about
-        world +Y, link length 1.0, and a 25 kg point mass at each link
-        midpoint. At ``q = (0, pi/2)`` link 1 points along world +X and
-        link 2 along world -Z. Because both joint axes lie along world Y,
-        motion is planar in the X-Z plane and the Coriolis term collapses
-        to a closed form that is independent of the link rotational
-        inertias:
+        Setup: a fixed-base double pendulum with two revolute joints both
+        about world +Y, link length 1.0, and a 25 kg point mass at each
+        link midpoint. At ``q = (0, pi/2)`` link 1 points along world +X
+        and link 2 along world -Z. Because both joint axes lie along
+        world Y, motion is planar in the X-Z plane and the Coriolis term
+        collapses to a closed form that is independent of the link
+        rotational inertias:
 
             c_1 = -m * L_1 * l_2c * sin(q2) * (2 * q_dot1 * q_dot2 + q_dot2^2)
             c_2 =  m * L_1 * l_2c * sin(q2) * q_dot1^2
 
-        With ``m = 25``, ``L_1 = 1``, ``l_2c = 0.5`` the prefactor is 12.5,
-        which yields the two PhysX-quoted reference cases below.
+        With ``m = 25``, ``L_1 = 1``, ``l_2c = 0.5`` the prefactor is 12.5;
+        the test evaluates these formulas at each ``q_dot`` case below and
+        compares against ``-coriolis_compensation_force`` from
+        :func:`newton.eval_inverse_dynamics`.
         """
+        # Per-link mass, link length L_1 (joint-to-joint distance), and link
+        # COM offset from the joint l_2c. Defined here so the closed-form
+        # Coriolis derivation below uses the same values the links are built
+        # with. Joints sit at the link's +/- X end and the COM is at the link
+        # center, so l_2c is L_1 / 2.
+        m = 25.0
+        L_1 = 1.0
+        l_2c = L_1 / 2.0
+
         identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
-        pos_half = wp.transform(wp.vec3(0.5, 0.0, 0.0), wp.quat_identity())
-        neg_half = wp.transform(wp.vec3(-0.5, 0.0, 0.0), wp.quat_identity())
+        pos_half = wp.transform(wp.vec3(l_2c, 0.0, 0.0), wp.quat_identity())
+        neg_half = wp.transform(wp.vec3(-l_2c, 0.0, 0.0), wp.quat_identity())
         y_axis = wp.vec3(0.0, 1.0, 0.0)
 
         builder = newton.ModelBuilder(gravity=-10.0, up_axis=newton.Axis.Z)
 
         b1 = builder.add_link(
             xform=identity_xform,
-            mass=25.0,
+            mass=m,
             inertia=self.I_UNIT,
             com=wp.vec3(0.0, 0.0, 0.0),
         )
@@ -1603,7 +1613,7 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
         )
         b2 = builder.add_link(
             xform=identity_xform,
-            mass=25.0,
+            mass=m,
             inertia=self.I_UNIT,
             com=wp.vec3(0.0, 0.0, 0.0),
         )
@@ -1619,21 +1629,28 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
         model = builder.finalize(device=self.device)
         inverse_dynamics = model.inverse_dynamics()
 
-        # Both states share q = (0, pi/2); only q_dot varies. Expected values are
-        # +C(q, q_dot) * q_dot per the PhysX convention.
-        cases = [
-            ((1.5, 0.0), (0.0, 28.125)),
-            ((1.5, 1.5), (-84.375, 28.125)),
-        ]
+        # All cases share q = (0, pi/2); only q_dot varies. The expected
+        # +C(q, q_dot) * q_dot values come from the closed-form Coriolis terms
+        # in the docstring evaluated with this articulation's geometry
+        # (m, L_1, l_2c defined above), giving
+        # prefactor = m * L_1 * l_2c * sin(q2).
+        q1 = 0.0
+        q2 = np.pi / 2.0
+        prefactor = m * L_1 * l_2c * np.sin(q2)
+        qd_cases = [(1.5, 0.0), (1.5, 1.5)]
 
-        for joint_qd_values, expected_physx in cases:
-            with self.subTest(joint_qd=joint_qd_values):
+        for qd1, qd2 in qd_cases:
+            expected = (
+                -prefactor * (2.0 * qd1 * qd2 + qd2 * qd2),
+                prefactor * qd1 * qd1,
+            )
+            with self.subTest(joint_qd=(qd1, qd2)):
                 state = model.state()
                 joint_q = state.joint_q.numpy()
-                joint_q[:] = (0.0, np.pi / 2.0)
+                joint_q[:] = (q1, q2)
                 state.joint_q.assign(joint_q)
                 joint_qd = state.joint_qd.numpy()
-                joint_qd[:] = joint_qd_values
+                joint_qd[:] = (qd1, qd2)
                 state.joint_qd.assign(joint_qd)
                 newton.eval_fk(model, state.joint_q, state.joint_qd, state)
 
@@ -1647,9 +1664,9 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
                 # Newton's coriolis_compensation_force has the same sign
                 # convention as gravity_compensation_force (i.e. opposite
                 # of "force the user would apply to compensate"), so
-                # compare -tau against the PhysX values.
+                # compare -tau against the expected values.
                 measured = inverse_dynamics.coriolis_compensation_force.numpy()
-                np.testing.assert_allclose(-measured, expected_physx, atol=1e-3, rtol=1e-5)
+                np.testing.assert_allclose(-measured, expected, atol=1e-3, rtol=1e-5)
 
     def test_coriolis_radial_slider_matches_analytical(self):
         """C(q, q_dot) for a rotating radial slider matches the closed-form values.
