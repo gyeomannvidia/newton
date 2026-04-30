@@ -1770,9 +1770,10 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         joint_quat = wp.quat(0.0, float(np.sin(np.pi / 12.0)), 0.0, float(np.cos(np.pi / 12.0)))
         # Non-zero CoM offset on link1 and link2 (the inboard ends of revolute
         # joints) exercises off-axis link mass distribution. Link 0 (the root)
-        # keeps a zero CoM: a non-zero CoM on the floating-base root surfaces a
-        # convention mismatch between Newton's RNEA and MuJoCo's free-joint
-        # integration that's outside this test's scope.
+        # keeps a zero CoM: a non-zero CoM on a floating-base root produces
+        # a manipulator-equation closure failure here that isn't yet
+        # understood, so we sidestep it by zeroing the root CoM while we
+        # mix fixed-root and floating-root articulations in the same model.
         non_root_com = wp.vec3(0.5, 0.2, -0.3)
         identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
         pos_two = wp.transform(wp.vec3(2.0, 0.0, 0.0), joint_quat)
@@ -1901,10 +1902,10 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         # world origin with identity orientation. Root velocity is zero unless
         # ``non_zero_initial_dof_velocities`` flips on the angular DOFs (linear
         # stays zero -- non-zero ``omega x v`` cross-coupling between root linear
-        # and angular velocity exposes a free-joint frame-convention mismatch
-        # between Newton's RNEA and MuJoCo, which we sidestep here). Root
-        # accelerations are arbitrary non-zero values so the floating root
-        # exercises non-trivial M(q)*qddot rows.
+        # and angular velocity produces a manipulator-equation closure failure
+        # here that isn't yet understood, so we sidestep it). Root accelerations
+        # are arbitrary non-zero values so the floating root exercises
+        # non-trivial M(q)*qddot rows.
         floating_root_q = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
         floating_root_qd = (
             (0.0, 0.0, 0.0, 0.3, -0.1, 0.2) if non_zero_initial_dof_velocities else (0.0,) * 6
