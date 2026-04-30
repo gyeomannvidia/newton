@@ -1953,6 +1953,7 @@ class TestMassMatrix(TestInverseDynamicsBase):
         builder.add_articulation([j1, j2], label="double_pendulum")
 
         model = builder.finalize(device=self.device)
+        inverse_dynamics = model.inverse_dynamics()
 
         cases = [
             (0.0, [[64.5, 19.75], [19.75, 7.25]]),
@@ -1968,7 +1969,10 @@ class TestMassMatrix(TestInverseDynamicsBase):
                 state.joint_q.assign(joint_q)
                 newton.eval_fk(model, state.joint_q, state.joint_qd, state)
 
-                M = newton.eval_mass_matrix(model, state).numpy()[0, :2, :2]
+                newton.eval_inverse_dynamics(
+                    model, state, newton.InverseDynamics.EvalType.MASS_MATRIX, inverse_dynamics
+                )
+                M = inverse_dynamics.mass_matrix.numpy()[0, :2, :2]
                 np.testing.assert_allclose(M, expected, atol=1e-3, rtol=1e-5)
 
 
