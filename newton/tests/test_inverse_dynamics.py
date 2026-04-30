@@ -1763,9 +1763,20 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
                 0.0, 0.0, mass * 20.0 / 12.0,
             )
 
+        # A non-identity joint-frame rotation makes the revolute axis no longer
+        # aligned with parent body +Z, so the test exercises non-trivial joint
+        # geometry. Quaternion (x, y, z, w) for a 30 deg rotation about world +Y
+        # is (0, sin(15 deg), 0, cos(15 deg)).
+        joint_quat = wp.quat(0.0, float(np.sin(np.pi / 12.0)), 0.0, float(np.cos(np.pi / 12.0)))
+        # Non-zero CoM offset on link1 and link2 (the inboard ends of revolute
+        # joints) exercises off-axis link mass distribution. Link 0 (the root)
+        # keeps a zero CoM: a non-zero CoM on the floating-base root surfaces a
+        # convention mismatch between Newton's RNEA and MuJoCo's free-joint
+        # integration that's outside this test's scope.
+        non_root_com = wp.vec3(0.5, 0.2, -0.3)
         identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
-        pos_two = wp.transform(wp.vec3(2.0, 0.0, 0.0), wp.quat_identity())
-        neg_two = wp.transform(wp.vec3(-2.0, 0.0, 0.0), wp.quat_identity())
+        pos_two = wp.transform(wp.vec3(2.0, 0.0, 0.0), joint_quat)
+        neg_two = wp.transform(wp.vec3(-2.0, 0.0, 0.0), joint_quat)
         z_axis = wp.vec3(0.0, 0.0, 1.0)
 
         def build_articulation(mass: float, inertia: wp.mat33, floating_base: bool) -> newton.ModelBuilder:
@@ -1794,7 +1805,7 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
                 xform=identity_xform,
                 mass=mass,
                 inertia=inertia,
-                com=wp.vec3(0.0, 0.0, 0.0),
+                com=non_root_com,
             )
             j1 = b.add_joint_revolute(
                 parent=link0,
@@ -1810,7 +1821,7 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
                 xform=identity_xform,
                 mass=mass,
                 inertia=inertia,
-                com=wp.vec3(0.0, 0.0, 0.0),
+                com=non_root_com,
             )
             j2 = b.add_joint_revolute(
                 parent=link1,
