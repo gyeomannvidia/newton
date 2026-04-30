@@ -1028,6 +1028,64 @@ def convert_free_distance_joint_f_public_to_internal(
         joint_f_internal[i] = 0.0
 
 
+@wp.kernel
+def convert_free_distance_joint_f_internal_to_public(
+    joint_type: wp.array[int],
+    joint_parent: wp.array[int],
+    joint_child: wp.array[int],
+    joint_qd_start: wp.array[int],
+    joint_X_p: wp.array[wp.transform],
+    body_q: wp.array[wp.transform],
+    body_com: wp.array[wp.vec3],
+    # in/out (modified for free/distance joints, untouched otherwise)
+    joint_f: wp.array[float],
+):
+    """Convert free/distance joint_f from body-origin to body-CoM frame.
+
+    For free and distance joints the joint motion subspace is the 6x6
+    identity, so ``joint_f`` IS the body's spatial wrench. RNEA's backward
+    pass produces this wrench at the body origin; Newton's documented
+    free-joint convention places it at the body CoM (paired with
+    ``joint_qd``'s child-COM-velocity linear component). Apply the
+    standard wrench-shift in place:
+
+        F_linear_at_com    = F_linear_at_origin                    (invariant)
+        tau_angular_at_com = tau_angular_at_origin - r_com x F_linear
+
+    Non-free / non-distance joints are untouched: their ``joint_f`` is a
+    per-axis scalar whose value does not depend on the reference point.
+    """
+    joint_id = wp.tid()
+    jtype = joint_type[joint_id]
+    if jtype != JointType.FREE and jtype != JointType.DISTANCE:
+        return
+
+    parent = joint_parent[joint_id]
+    child = joint_child[joint_id]
+    qd_start = joint_qd_start[joint_id]
+
+    # r_child_com expressed in the parent frame (matches
+    # convert_free_distance_joint_qd_public_to_internal so the input-side
+    # qd shift and the output-side wrench shift use the same offset vector).
+    X_wpj = joint_X_p[joint_id]
+    if parent >= 0:
+        X_wpj = body_q[parent] * X_wpj
+    q_p = wp.transform_get_rotation(X_wpj)
+    x_anchor_world = wp.transform_get_translation(X_wpj)
+    x_child_com_world = wp.transform_point(body_q[child], body_com[child])
+    r_child_com_parent = wp.quat_rotate_inv(q_p, x_child_com_world - x_anchor_world)
+
+    F_linear = wp.vec3(
+        joint_f[qd_start + 0],
+        joint_f[qd_start + 1],
+        joint_f[qd_start + 2],
+    )
+    correction = wp.cross(r_child_com_parent, F_linear)
+    joint_f[qd_start + 3] = joint_f[qd_start + 3] - correction[0]
+    joint_f[qd_start + 4] = joint_f[qd_start + 4] - correction[1]
+    joint_f[qd_start + 5] = joint_f[qd_start + 5] - correction[2]
+
+
 # Inverse dynamics via Recursive Newton-Euler algorithm (Featherstone Table 5.1)
 @wp.kernel
 def eval_rigid_id(

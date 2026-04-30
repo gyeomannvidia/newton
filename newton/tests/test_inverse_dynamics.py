@@ -833,12 +833,15 @@ class TestGravCompForce(TestInverseDynamicsBase):
 
         expected_grav_comp_forces = [
             20.0,  # World 0, fixed root, 1 dof
-            0.0,  # World 0, floating root, 6+1 dofs
+            0.0,  # World 0, floating root, 6+1 dofs (linear x, y, z, angular x, y, z, internal q)
             70.0,
             0.0,
             0.0,
             0.0,
-            15.0,
+            # angular z: gravity on child (offset from root CoM by (-0.5, 0, 0))
+            # creates torque (-0.5, 0, 0) × (0, -40, 0) = (0, 0, +20) about root CoM;
+            # compensation is -20, Newton negates to +20, test expects -measured = -20
+            -20.0,
             40.0,
             60.0,  # World 1, fixed root, 1 dof
             0.0,  # World 1, floating root, 6+1 dofs
@@ -846,7 +849,9 @@ class TestGravCompForce(TestInverseDynamicsBase):
             0.0,
             0.0,
             0.0,
-            75.0,
+            # angular z about root CoM: child CoM coincides with root CoM (both at (0.5, 0, 0))
+            # → torque about root CoM = 0
+            0.0,
             80.0,
         ]
 
@@ -1572,6 +1577,97 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
                 measured = inverse_dynamics.coriolis_compensation_force.numpy()
                 np.testing.assert_allclose(-measured, expected, atol=1e-4, rtol=1e-5)
 
+    def test_coriolis_floating_root_with_com_offset(self):
+        """Pin down Newton's free-joint Coriolis convention with non-zero root CoM.
+
+        Builds a single free-joint body with a non-zero CoM offset and a
+        known angular velocity, then compares Newton's
+        ``coriolis_compensation_force`` against the closed-form spatial
+        Coriolis bias under Newton's documented free-joint convention --
+        joint_qd's linear part is "child-COM velocity", so joint_f is a
+        wrench at the body CoM. With pose = identity (so body frame =
+        world frame and ``I_world = I_body``), the bias at the CoM is:
+
+            linear  = omega x (m * v_com)
+            angular = omega x (I_body * omega)
+
+        Newton's compensation force returns ``-(C * q_dot)`` (matching
+        gravity_compensation_force's sign convention), so the test
+        compares ``-tau`` against the closed-form values. If Newton's
+        free-joint RNEA actually outputs at the body origin (not the
+        CoM), this test fails -- exactly the gap that surfaced as a
+        manipulator-equation closure failure in
+        :meth:`TestManipulatorEquation._test_inverse_dynamics_force`
+        with non-zero root CoM.
+        """
+        identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
+
+        m = 1.0
+        # Anisotropic body-frame inertia so the gyroscopic angular bias
+        # omega x (I * omega) is non-zero for a generic omega.
+        I_diag = (2.0, 1.0, 0.5)
+        I_body = wp.mat33(I_diag[0], 0.0, 0.0, 0.0, I_diag[1], 0.0, 0.0, 0.0, I_diag[2])
+        r_com = wp.vec3(0.5, 0.2, -0.3)
+
+        builder = newton.ModelBuilder(gravity=0.0, up_axis=newton.Axis.Z)
+        body = builder.add_link(
+            xform=identity_xform,
+            mass=m,
+            inertia=I_body,
+            com=r_com,
+        )
+        j_root = builder.add_joint_free(
+            parent=-1,
+            child=body,
+            parent_xform=identity_xform,
+            child_xform=identity_xform,
+        )
+        builder.add_articulation([j_root], label="floating_body")
+
+        model = builder.finalize(device=self.device)
+        inverse_dynamics = model.inverse_dynamics()
+
+        # Sweep two states: stationary CoM with rotation (purely gyroscopic,
+        # so v_com convention predicts zero linear), and translating + rotating
+        # CoM (linear bias is non-zero under v_com convention).
+        cases = [
+            ((0.0, 0.0, 0.0), (0.3, -0.1, 0.2)),
+            ((0.1, -0.2, 0.05), (0.3, -0.1, 0.2)),
+        ]
+
+        I_np = np.diag(I_diag)
+        for v_com_values, omega_values in cases:
+            with self.subTest(v_com=v_com_values, omega=omega_values):
+                state = model.state()
+                joint_q = state.joint_q.numpy()
+                joint_q[:] = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)  # pose = identity
+                state.joint_q.assign(joint_q)
+                joint_qd = state.joint_qd.numpy()
+                joint_qd[:] = (*v_com_values, *omega_values)
+                state.joint_qd.assign(joint_qd)
+                newton.eval_fk(model, state.joint_q, state.joint_qd, state)
+
+                newton.eval_inverse_dynamics(
+                    model,
+                    state,
+                    newton.InverseDynamics.EvalType.CORIOLIS_COMPENSATION_FORCE,
+                    inverse_dynamics,
+                )
+                # Newton's value with the negation convention flipped back to
+                # the standard +C(q, q_dot)*q_dot.
+                measured_linear = -inverse_dynamics.coriolis_compensation_force.numpy()[0:3]
+                measured_angular = -inverse_dynamics.coriolis_compensation_force.numpy()[3:6]
+
+                # Closed-form spatial Coriolis bias at the body CoM under
+                # Newton's documented free-joint convention.
+                omega = np.asarray(omega_values, dtype=np.float64)
+                v_com = np.asarray(v_com_values, dtype=np.float64)
+                expected_linear = np.cross(omega, m * v_com)
+                expected_angular = np.cross(omega, I_np @ omega)
+
+                np.testing.assert_allclose(measured_linear, expected_linear, atol=1e-5, rtol=1e-5)
+                np.testing.assert_allclose(measured_angular, expected_angular, atol=1e-5, rtol=1e-5)
+
 
 class TestMassMatrix(TestInverseDynamicsBase):
     """Mass-matrix tests for the two-link pendulum harness."""
@@ -1768,12 +1864,10 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         # geometry. Quaternion (x, y, z, w) for a 30 deg rotation about world +Y
         # is (0, sin(15 deg), 0, cos(15 deg)).
         joint_quat = wp.quat(0.0, float(np.sin(np.pi / 12.0)), 0.0, float(np.cos(np.pi / 12.0)))
-        # Non-zero CoM offset on link1 and link2 (the inboard ends of revolute
-        # joints) exercises off-axis link mass distribution. Link 0 (the root)
-        # keeps a zero CoM: a non-zero CoM on a floating-base root produces
-        # a manipulator-equation closure failure here that isn't yet
-        # understood, so we sidestep it by zeroing the root CoM while we
-        # mix fixed-root and floating-root articulations in the same model.
+        # Non-zero CoM offset applied to every link (root and inboard) so the
+        # test exercises off-axis mass distribution everywhere -- including
+        # the floating-root case where the public free-joint v_com convention
+        # interacts non-trivially with the inverse-dynamics RNEA.
         non_root_com = wp.vec3(0.5, 0.2, -0.3)
         identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
         pos_two = wp.transform(wp.vec3(2.0, 0.0, 0.0), joint_quat)
@@ -1786,7 +1880,7 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
                 xform=identity_xform,
                 mass=mass,
                 inertia=inertia,
-                com=wp.vec3(0.0, 0.0, 0.0),
+                com=non_root_com,
             )
             if floating_base:
                 j0 = b.add_joint_free(
@@ -1901,11 +1995,12 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         # Floating-base root state used for every test case. The base sits at the
         # world origin with identity orientation. Root velocity is zero unless
         # ``non_zero_initial_dof_velocities`` flips on the angular DOFs (linear
-        # stays zero -- non-zero ``omega x v`` cross-coupling between root linear
-        # and angular velocity produces a manipulator-equation closure failure
-        # here that isn't yet understood, so we sidestep it). Root accelerations
-        # are arbitrary non-zero values so the floating root exercises
-        # non-trivial M(q)*qddot rows.
+        # stays zero -- non-zero ``omega x v_com`` cross-coupling between root
+        # linear and angular velocity surfaces a separate Newton-vs-MuJoCo
+        # angular-velocity-frame question on the simulator side, independent
+        # of the inverse-dynamics convention this test exercises). Root
+        # accelerations are arbitrary non-zero values so the floating root
+        # exercises non-trivial M(q)*qddot rows.
         floating_root_q = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
         floating_root_qd = (
             (0.0, 0.0, 0.0, 0.3, -0.1, 0.2) if non_zero_initial_dof_velocities else (0.0,) * 6

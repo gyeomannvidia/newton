@@ -113,6 +113,8 @@ def _rnea_compensation_pass(
     from ..solvers.featherstone.kernels import (  # noqa: PLC0415
         compute_com_transforms,
         compute_spatial_inertia,
+        convert_free_distance_joint_f_internal_to_public,
+        convert_free_distance_joint_qd_public_to_internal,
         eval_rigid_fk,
         eval_rigid_id,
         eval_rigid_tau,
@@ -163,6 +165,28 @@ def _rnea_compensation_pass(
         device=device,
     )
 
+    # Convert input joint_qd from Newton's documented free-joint convention
+    # (linear = child-COM velocity in parent frame) to RNEA's internal
+    # body-origin convention (linear = body-origin velocity in parent frame).
+    # Non-free / non-distance joints are copied through unchanged.
+    joint_qd_internal = wp.empty_like(joint_qd)
+    wp.launch(
+        convert_free_distance_joint_qd_public_to_internal,
+        dim=model.joint_count,
+        inputs=[
+            model.joint_type,
+            model.joint_parent,
+            model.joint_child,
+            model.joint_qd_start,
+            model.joint_X_p,
+            body_q,
+            model.body_com,
+            joint_qd,
+        ],
+        outputs=[joint_qd_internal],
+        device=device,
+    )
+
     # RNEA forward pass: body bias wrenches in the spatial frame.
     dof_count = model.joint_qd.shape[0]
     joint_S_s = wp.zeros(dof_count, dtype=wp.spatial_vector, device=device)
@@ -179,7 +203,7 @@ def _rnea_compensation_pass(
             model.joint_parent,
             model.joint_child,
             model.joint_qd_start,
-            joint_qd,
+            joint_qd_internal,
             model.joint_axis,
             model.joint_dof_dim,
             body_I_m,
@@ -213,7 +237,7 @@ def _rnea_compensation_pass(
             zeros_dof,  # joint_target_pos
             zeros_dof,  # joint_target_vel
             state.joint_q,
-            joint_qd,
+            joint_qd_internal,
             zeros_dof,  # joint_f
             zeros_dof,  # joint_target_ke
             zeros_dof,  # joint_target_kd
@@ -226,6 +250,25 @@ def _rnea_compensation_pass(
             zeros_body,  # body_f_ext
         ],
         outputs=[body_ft_s, tau_out],
+        device=device,
+    )
+
+    # Convert output tau_out from RNEA's internal body-origin convention to
+    # Newton's documented free-joint joint_f convention (wrench at body CoM).
+    # Non-free / non-distance joints are unaffected.
+    wp.launch(
+        convert_free_distance_joint_f_internal_to_public,
+        dim=model.joint_count,
+        inputs=[
+            model.joint_type,
+            model.joint_parent,
+            model.joint_child,
+            model.joint_qd_start,
+            model.joint_X_p,
+            body_q,
+            model.body_com,
+        ],
+        outputs=[tau_out],
         device=device,
     )
 
