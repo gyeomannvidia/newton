@@ -1584,21 +1584,26 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
         known angular velocity, then compares Newton's
         ``coriolis_compensation_force`` against the closed-form spatial
         Coriolis bias under Newton's documented free-joint convention --
-        joint_qd's linear part is "child-COM velocity", so joint_f is a
-        wrench at the body CoM. With pose = identity (so body frame =
-        world frame and ``I_world = I_body``), the bias at the CoM is:
+        joint_qd's linear part is parent/world-frame CoM velocity, so
+        joint_f is a wrench at the body CoM expressed in the world frame.
+        With pose = identity (so body frame = world frame and
+        ``I_world = I_body``), Newton's second law at the CoM gives:
 
-            linear  = omega x (m * v_com)
-            angular = omega x (I_body * omega)
+            linear  = 0                       (m * a_com = F, no Coriolis)
+            angular = omega x (I_body * omega)  (gyroscopic)
 
         Newton's compensation force returns ``-(C * q_dot)`` (matching
         gravity_compensation_force's sign convention), so the test
-        compares ``-tau`` against the closed-form values. If Newton's
-        free-joint RNEA actually outputs at the body origin (not the
-        CoM), this test fails -- exactly the gap that surfaced as a
-        manipulator-equation closure failure in
+        compares ``-tau`` against the closed-form values.
+
+        The angular case passes; the linear case currently fails because
+        Newton's free-joint RNEA emits a spurious ``omega x (m * v_com)``
+        term (residual from RNEA's internal v_origin convention -- the
+        output wrench shift from body origin to CoM is linear-invariant
+        and cannot suppress it). This is the same gap that breaks the
+        manipulator-equation closure in
         :meth:`TestManipulatorEquation._test_inverse_dynamics_force`
-        with non-zero root CoM.
+        with non-zero root CoM and non-zero root linear velocity.
         """
         identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
 
@@ -1625,32 +1630,49 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
         builder.add_articulation([j_root], label="floating_body")
 
         model = builder.finalize(device=self.device)
+        state = model.state()
+        state_next = model.state()
+        control = model.control()
+        contacts = model.contacts()
         inverse_dynamics = model.inverse_dynamics()
+        solver = newton.solvers.SolverMuJoCo(model)
+        dt = 1e-4
 
         # Sweep two states: stationary CoM with rotation (purely gyroscopic,
         # so v_com convention predicts zero linear), and translating + rotating
         # CoM (linear bias is non-zero under v_com convention).
-        cases = [
-            ((0.0, 0.0, 0.0), (0.3, -0.1, 0.2)),
-            ((0.1, -0.2, 0.05), (0.3, -0.1, 0.2)),
+        v_com_cases = [
+            (0.0, 0.0, 0.0),
+            (0.1, -0.2, 0.05),
         ]
+        omega_cases = [
+            (0.3, -0.1, 0.2),
+            (0.3, -0.1, 0.2),
+        ]
+        num_cases = len(v_com_cases)
 
         I_np = np.diag(I_diag)
-        for v_com_values, omega_values in cases:
+        for i in range(num_cases):
+            v_com_values = v_com_cases[i]
+            omega_values = omega_cases[i]
             with self.subTest(v_com=v_com_values, omega=omega_values):
-                state = model.state()
+
+                # Set the initial pos.
                 joint_q = state.joint_q.numpy()
                 joint_q[:] = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)  # pose = identity
                 state.joint_q.assign(joint_q)
+
+                # Set the initial velocity at the CoM.
                 joint_qd = state.joint_qd.numpy()
                 joint_qd[:] = (*v_com_values, *omega_values)
                 state.joint_qd.assign(joint_qd)
-                newton.eval_fk(model, state.joint_q, state.joint_qd, state)
 
+                newton.eval_fk(model, state.joint_q, state.joint_qd, state)
                 newton.eval_inverse_dynamics(
                     model,
                     state,
-                    newton.InverseDynamics.EvalType.CORIOLIS_COMPENSATION_FORCE,
+                    newton.InverseDynamics.EvalType.MASS_MATRIX
+                    | newton.InverseDynamics.EvalType.CORIOLIS_COMPENSATION_FORCE,
                     inverse_dynamics,
                 )
                 # Newton's value with the negation convention flipped back to
@@ -1659,14 +1681,156 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
                 measured_angular = -inverse_dynamics.coriolis_compensation_force.numpy()[3:6]
 
                 # Closed-form spatial Coriolis bias at the body CoM under
-                # Newton's documented free-joint convention.
+                # Newton's documented free-joint convention. Linear is
+                # zero (Newton's second law at the CoM in an inertial
+                # frame: m * a_com = F, with no Coriolis term); angular
+                # is the standard gyroscopic bias.
                 omega = np.asarray(omega_values, dtype=np.float64)
-                v_com = np.asarray(v_com_values, dtype=np.float64)
-                expected_linear = np.cross(omega, m * v_com)
+                expected_linear = np.zeros(3)
                 expected_angular = np.cross(omega, I_np @ omega)
 
                 np.testing.assert_allclose(measured_linear, expected_linear, atol=1e-5, rtol=1e-5)
                 np.testing.assert_allclose(measured_angular, expected_angular, atol=1e-5, rtol=1e-5)
+
+                # Cross-check against the simulator: with zero applied force
+                # and zero gravity, MuJoCo's qddot reflects -M^{-1} * C(q, qd) * qd
+                # under its own internal conventions.
+                solver.step(state, state_next, control, contacts, dt)
+                qddot_observed = (state_next.joint_qd.numpy() - np.asarray(joint_qd[:], dtype=np.float64)) / dt
+                print(f"qddot_observed (v_com={v_com_values}, omega={omega_values}): {qddot_observed}")
+
+                # Recover M * qddot from the simulator step using the
+                # public inverse-dynamics API. Under the manipulator equation
+                # with zero applied force and zero gravity,
+                # M * qddot = -C(q, qd) * qd, so this is the simulator's
+                # view of the Coriolis compensation force.
+                qddot_arr = wp.array(qddot_observed.astype(np.float32), dtype=wp.float32, device=self.device)
+                zero_bias = wp.zeros(model.joint_dof_count, dtype=wp.float32, device=self.device)
+                newton.eval_inverse_dynamics_force(
+                    model,
+                    inverse_dynamics.mass_matrix,
+                    qddot_arr,
+                    zero_bias,
+                    zero_bias,
+                    inverse_dynamics.tau,
+                )
+                M_qddot = inverse_dynamics.tau.numpy()
+                print(f"M @ qddot_observed (v_com={v_com_values}, omega={omega_values}): {M_qddot}")
+
+    def test_coriolis_fixed_root_chain_with_com_offsets(self):
+        """Verify Coriolis comp force for a fixed-root revolute chain with non-zero link CoMs.
+
+        Builds a 2-link revolute chain anchored to world (joint axes y, z
+        for cross-coupling) with non-zero CoM offsets and anisotropic
+        inertias on both links. Under zero gravity and zero applied force
+        the manipulator equation reduces to ``M(q) * qddot = -C(q, qd) * qd``,
+        so the simulator's ``M * qddot`` after one step must equal
+        Newton's ``coriolis_compensation_force``.
+
+        For non-free joints, the joint torque is the scalar projection
+        ``S^T * f``, which is reference-point invariant -- so unlike free
+        joints, no convention boundary needs crossing and CoM offsets do
+        not contaminate the Coriolis output. This locks that property in
+        as a regression next to the free-joint case in
+        :meth:`test_coriolis_floating_root_with_com_offset`.
+        """
+        identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
+        pos_x = wp.transform(wp.vec3(0.5, 0.0, 0.0), wp.quat_identity())
+        neg_x = wp.transform(wp.vec3(-0.5, 0.0, 0.0), wp.quat_identity())
+        y_axis = wp.vec3(0.0, 1.0, 0.0)
+        z_axis = wp.vec3(0.0, 0.0, 1.0)
+
+        # Anisotropic inertia and non-zero CoM offsets on both links to
+        # exercise the body-CoM term in the spatial-inertia bias.
+        I_link = wp.mat33(2.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.5)
+        com_link = wp.vec3(0.1, 0.2, -0.15)
+
+        builder = newton.ModelBuilder(gravity=0.0, up_axis=newton.Axis.Z)
+        b1 = builder.add_link(xform=identity_xform, mass=1.0, inertia=I_link, com=com_link)
+        j1 = builder.add_joint_revolute(
+            parent=-1,
+            child=b1,
+            axis=y_axis,
+            parent_xform=identity_xform,
+            child_xform=neg_x,
+        )
+        b2 = builder.add_link(xform=identity_xform, mass=1.0, inertia=I_link, com=com_link)
+        j2 = builder.add_joint_revolute(
+            parent=b1,
+            child=b2,
+            axis=z_axis,
+            parent_xform=pos_x,
+            child_xform=neg_x,
+        )
+        builder.add_articulation([j1, j2], label="fixed_root_chain")
+
+        model = builder.finalize(device=self.device)
+        state = model.state()
+        state_next = model.state()
+        control = model.control()
+        contacts = model.contacts()
+        inverse_dynamics = model.inverse_dynamics()
+        solver = newton.solvers.SolverMuJoCo(model)
+        dt = 1e-4
+        zero_bias = wp.zeros(model.joint_dof_count, dtype=wp.float32, device=self.device)
+
+        # Configurations chosen to make C(q, qd) * qd non-trivial: away
+        # from singular alignments and with both qd_i non-zero so the
+        # cross-coupling between joint 1 and joint 2 is exercised.
+        q_cases = [
+            (0.0, 0.0),
+            (0.3, np.pi / 2.0),
+            (-np.pi / 4.0, np.pi / 6.0),
+        ]
+        qd_cases = [
+            (1.5, 1.5),
+            (0.7, -1.2),
+            (1.0, 0.5),
+        ]
+        num_cases = len(q_cases)
+
+        for i in range(num_cases):
+            q_values = q_cases[i]
+            qd_values = qd_cases[i]
+            with self.subTest(joint_q=q_values, joint_qd=qd_values):
+                joint_q = state.joint_q.numpy()
+                joint_q[:] = q_values
+                state.joint_q.assign(joint_q)
+                joint_qd = state.joint_qd.numpy()
+                joint_qd[:] = qd_values
+                state.joint_qd.assign(joint_qd)
+                newton.eval_fk(model, state.joint_q, state.joint_qd, state)
+
+                newton.eval_inverse_dynamics(
+                    model,
+                    state,
+                    newton.InverseDynamics.EvalType.MASS_MATRIX
+                    | newton.InverseDynamics.EvalType.CORIOLIS_COMPENSATION_FORCE,
+                    inverse_dynamics,
+                )
+                coriolis_comp = inverse_dynamics.coriolis_compensation_force.numpy()
+
+                # Step with zero applied force and zero gravity:
+                # M * qddot = -C(q, qd) * qd = coriolis_compensation_force.
+                solver.step(state, state_next, control, contacts, dt)
+                qddot_observed = (
+                    state_next.joint_qd.numpy() - np.asarray(joint_qd[:], dtype=np.float64)
+                ) / dt
+
+                qddot_arr = wp.array(
+                    qddot_observed.astype(np.float32), dtype=wp.float32, device=self.device
+                )
+                newton.eval_inverse_dynamics_force(
+                    model,
+                    inverse_dynamics.mass_matrix,
+                    qddot_arr,
+                    zero_bias,
+                    zero_bias,
+                    inverse_dynamics.tau,
+                )
+                M_qddot = inverse_dynamics.tau.numpy()
+
+                np.testing.assert_allclose(coriolis_comp, M_qddot, atol=2e-3, rtol=2e-3)
 
 
 class TestMassMatrix(TestInverseDynamicsBase):
