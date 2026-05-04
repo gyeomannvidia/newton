@@ -1669,8 +1669,7 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
                 newton.eval_inverse_dynamics(
                     model,
                     state,
-                    newton.InverseDynamics.EvalType.MASS_MATRIX
-                    | newton.InverseDynamics.EvalType.CORIOLIS_COMPENSATION_FORCE,
+                    newton.InverseDynamics.EvalType.CORIOLIS_COMPENSATION_FORCE,
                     inverse_dynamics,
                 )
                 # Newton's value with the negation convention flipped back to
