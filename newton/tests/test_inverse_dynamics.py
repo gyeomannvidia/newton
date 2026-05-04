@@ -1839,86 +1839,96 @@ class TestMassMatrix(TestInverseDynamicsBase):
         np.testing.assert_allclose(inverse_dynamics.mass_matrix.numpy(), H_reference, rtol=1e-6, atol=1e-6)
 
     def test_mass_matrix_planar_double_pendulum_matches_analytical(self):
-        """M(q) for a planar double pendulum matches the closed-form expression.
+        """M(q) for a planar double pendulum matches the closed-form expression for zero and non-zero CoM.
 
         Same articulation as
         ``TestCoriolisCompForce.test_coriolis_double_pendulum_matches_analytical``:
-        fixed-base, two revolute joints both about world +Y, link
-        length 1, 25 kg point mass at each link midpoint, identity
-        body-frame inertia. For two revolute joints sharing the same
-        axis the mass matrix is:
+        fixed-base, two revolute joints both about world +Y, joint-to-joint
+        link length 1, 25 kg per link, identity body-frame inertia. For two
+        revolute joints sharing the same axis the mass matrix is:
 
             M_11 = m1*l1c^2 + m2*(L1^2 + l2c^2 + 2*L1*l2c*cos(q2)) + Iyy_1 + Iyy_2
             M_22 = m2*l2c^2 + Iyy_2
             M_12 = m2*(l2c^2 + L1*l2c*cos(q2)) + Iyy_2
 
-        With m=25, l1c=l2c=0.5, L1=1, Iyy=1 (from ``I_UNIT``):
-
-            M_11 = 39.5 + 25 * cos(q2)
-            M_22 = 7.25
-            M_12 = 7.25 + 12.5 * cos(q2)
-
-        ``M`` depends only on q2 (rotational symmetry about world +Y);
-        the test sweeps q2 in {0, pi/2, pi} to exercise the full
-        range of cos(q2).
+        where ``l_ic`` is the joint-axis-to-link-CoM distance. With body-frame
+        ``com = (com_x, 0, 0)`` on each link, the CoM sits at distance
+        ``0.5 + com_x`` from the joint axis along the link, so the parallel-
+        axis CoM-offset contribution to M scales with ``com_x``. The test
+        sweeps ``com_x`` in {0.0, 0.1} (zero-CoM baseline + non-zero-CoM
+        regression) and ``q2`` in {0, pi/2, pi} (full range of cos(q2));
+        ``M`` is q1-independent (rotational symmetry about world +Y).
         """
         identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
         pos_half = wp.transform(wp.vec3(0.5, 0.0, 0.0), wp.quat_identity())
         neg_half = wp.transform(wp.vec3(-0.5, 0.0, 0.0), wp.quat_identity())
         y_axis = wp.vec3(0.0, 1.0, 0.0)
 
-        builder = newton.ModelBuilder(gravity=-10.0, up_axis=newton.Axis.Z)
+        m = 25.0
+        Iyy = 1.0  # I_UNIT yy entry
+        L1 = 1.0  # joint-to-joint distance
 
-        b1 = builder.add_link(
-            xform=identity_xform,
-            mass=25.0,
-            inertia=self.I_UNIT,
-            com=wp.vec3(0.0, 0.0, 0.0),
-        )
-        j1 = builder.add_joint_revolute(
-            parent=-1,
-            child=b1,
-            axis=y_axis,
-            parent_xform=identity_xform,
-            child_xform=neg_half,
-        )
-        b2 = builder.add_link(
-            xform=identity_xform,
-            mass=25.0,
-            inertia=self.I_UNIT,
-            com=wp.vec3(0.0, 0.0, 0.0),
-        )
-        j2 = builder.add_joint_revolute(
-            parent=b1,
-            child=b2,
-            axis=y_axis,
-            parent_xform=pos_half,
-            child_xform=neg_half,
-        )
-        builder.add_articulation([j1, j2], label="double_pendulum")
+        com_x_cases = [0.0, 0.1]
+        q2_cases = [0.0, np.pi / 2.0, np.pi]
 
-        model = builder.finalize(device=self.device)
-        inverse_dynamics = model.inverse_dynamics()
+        for com_x in com_x_cases:
+            with self.subTest(com_x=com_x):
+                link_com = wp.vec3(com_x, 0.0, 0.0)
+                l1c = 0.5 + com_x
+                l2c = 0.5 + com_x
 
-        cases = [
-            (0.0, [[64.5, 19.75], [19.75, 7.25]]),
-            (np.pi / 2.0, [[39.5, 7.25], [7.25, 7.25]]),
-            (np.pi, [[14.5, -5.25], [-5.25, 7.25]]),
-        ]
-
-        for q2, expected in cases:
-            with self.subTest(q2=q2):
-                state = model.state()
-                joint_q = state.joint_q.numpy()
-                joint_q[:] = (0.7, q2)  # q1 arbitrary; M is q1-independent
-                state.joint_q.assign(joint_q)
-                newton.eval_fk(model, state.joint_q, state.joint_qd, state)
-
-                newton.eval_inverse_dynamics(
-                    model, state, newton.InverseDynamics.EvalType.MASS_MATRIX, inverse_dynamics
+                builder = newton.ModelBuilder(gravity=-10.0, up_axis=newton.Axis.Z)
+                b1 = builder.add_link(
+                    xform=identity_xform,
+                    mass=m,
+                    inertia=self.I_UNIT,
+                    com=link_com,
                 )
-                M = inverse_dynamics.mass_matrix.numpy()[0, :2, :2]
-                np.testing.assert_allclose(M, expected, atol=1e-3, rtol=1e-5)
+                j1 = builder.add_joint_revolute(
+                    parent=-1,
+                    child=b1,
+                    axis=y_axis,
+                    parent_xform=identity_xform,
+                    child_xform=neg_half,
+                )
+                b2 = builder.add_link(
+                    xform=identity_xform,
+                    mass=m,
+                    inertia=self.I_UNIT,
+                    com=link_com,
+                )
+                j2 = builder.add_joint_revolute(
+                    parent=b1,
+                    child=b2,
+                    axis=y_axis,
+                    parent_xform=pos_half,
+                    child_xform=neg_half,
+                )
+                builder.add_articulation([j1, j2], label="double_pendulum")
+
+                model = builder.finalize(device=self.device)
+                inverse_dynamics = model.inverse_dynamics()
+
+                for q2 in q2_cases:
+                    with self.subTest(com_x=com_x, q2=q2):
+                        state = model.state()
+                        joint_q = state.joint_q.numpy()
+                        joint_q[:] = (0.7, q2)  # q1 arbitrary; M is q1-independent
+                        state.joint_q.assign(joint_q)
+                        newton.eval_fk(model, state.joint_q, state.joint_qd, state)
+
+                        newton.eval_inverse_dynamics(
+                            model, state, newton.InverseDynamics.EvalType.MASS_MATRIX, inverse_dynamics
+                        )
+                        M = inverse_dynamics.mass_matrix.numpy()[0, :2, :2]
+
+                        cos_q2 = np.cos(q2)
+                        M_11 = m * l1c**2 + m * (L1**2 + l2c**2 + 2.0 * L1 * l2c * cos_q2) + 2.0 * Iyy
+                        M_22 = m * l2c**2 + Iyy
+                        M_12 = m * (l2c**2 + L1 * l2c * cos_q2) + Iyy
+                        expected = np.array([[M_11, M_12], [M_12, M_22]])
+
+                        np.testing.assert_allclose(M, expected, atol=1e-3, rtol=1e-5)
 
 
 class TestManipulatorEquation(TestInverseDynamicsBase):
@@ -2005,7 +2015,7 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         # test exercises off-axis mass distribution everywhere -- including
         # the floating-root case where the public free-joint v_com convention
         # interacts non-trivially with the inverse-dynamics RNEA.
-        non_root_com = wp.vec3(0.5, 0.2, -0.3)
+        link_com = wp.vec3(0.5, 0.2, -0.3)
         identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
         pos_two = wp.transform(wp.vec3(2.0, 0.0, 0.0), joint_quat)
         neg_two = wp.transform(wp.vec3(-2.0, 0.0, 0.0), joint_quat)
@@ -2017,7 +2027,7 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
                 xform=identity_xform,
                 mass=mass,
                 inertia=inertia,
-                com=non_root_com,
+                com=link_com,
             )
             if floating_base:
                 j0 = b.add_joint_free(
@@ -2037,7 +2047,7 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
                 xform=identity_xform,
                 mass=mass,
                 inertia=inertia,
-                com=non_root_com,
+                com=link_com,
             )
             j1 = b.add_joint_revolute(
                 parent=link0,
@@ -2053,7 +2063,7 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
                 xform=identity_xform,
                 mass=mass,
                 inertia=inertia,
-                com=non_root_com,
+                com=link_com,
             )
             j2 = b.add_joint_revolute(
                 parent=link1,
