@@ -255,7 +255,9 @@ def _rnea_compensation_pass(
 
     # Convert output tau_out from RNEA's internal body-origin convention to
     # Newton's documented free-joint joint_f convention (wrench at body CoM).
-    # Non-free / non-distance joints are unaffected.
+    # Subtracts the spatial-vs-classical acceleration convention bias and
+    # then shifts the wrench from body origin to body CoM. Non-free /
+    # non-distance joints are unaffected.
     wp.launch(
         convert_free_distance_joint_f_internal_to_public,
         dim=model.joint_count,
@@ -267,6 +269,8 @@ def _rnea_compensation_pass(
             model.joint_X_p,
             body_q,
             model.body_com,
+            model.body_mass,
+            joint_qd,
         ],
         outputs=[tau_out],
         device=device,
