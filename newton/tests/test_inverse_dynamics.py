@@ -1690,6 +1690,115 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
                 np.testing.assert_allclose(measured_linear, expected_linear, atol=1e-5, rtol=1e-5)
                 np.testing.assert_allclose(measured_angular, expected_angular, atol=1e-5, rtol=1e-5)
 
+    def test_coriolis_floating_root_with_non_identity_child_xform(self):
+        """Verify free-joint Coriolis with a non-identity child_xform on the free joint.
+
+        Single free-joint body with a non-identity ``child_xform``
+        (translation + rotation about world +Z) on the root joint, plus
+        non-zero CoM and anisotropic inertia. The conversion kernels go
+        through ``body_q[child]`` to compute ``r_child_com_parent``, so
+        non-identity ``child_xform`` changes the body's world pose seen
+        by the kernels even when ``joint_q`` is the identity.
+
+        With ``parent_xform = identity``, ``joint_q.rotation = identity``,
+        and ``child_xform.rotation = R_c``, the body's world rotation is
+        ``R_b = R_c^T``. The body-frame inertia ``I_body`` then maps to
+        world frame as ``I_world = R_b * I_body * R_b^T``, and the
+        closed-form Coriolis bias at the body CoM under Newton's v_com
+        convention is::
+
+            linear  = 0
+            angular = omega x (I_world * omega)
+
+        The linear component is zero independently of ``R_b`` (Newton's
+        second law at the CoM); the angular component exercises the
+        body-frame to world-frame inertia rotation path that
+        identity-``child_xform`` tests cannot reach.
+        """
+        identity_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
+        # 30 deg rotation about world +Z combined with a translation:
+        # quat (x, y, z, w) for half-angle 15 deg about +Z.
+        half_angle = float(np.pi / 12.0)
+        child_xform_quat = wp.quat(0.0, 0.0, float(np.sin(half_angle)), float(np.cos(half_angle)))
+        child_xform_offset = wp.transform(wp.vec3(0.3, -0.2, 0.1), child_xform_quat)
+
+        m = 1.0
+        I_diag = (2.0, 1.0, 0.5)
+        I_body = wp.mat33(I_diag[0], 0.0, 0.0, 0.0, I_diag[1], 0.0, 0.0, 0.0, I_diag[2])
+        r_com = wp.vec3(0.5, 0.2, -0.3)
+
+        builder = newton.ModelBuilder(gravity=0.0, up_axis=newton.Axis.Z)
+        body = builder.add_link(
+            xform=identity_xform,
+            mass=m,
+            inertia=I_body,
+            com=r_com,
+        )
+        j_root = builder.add_joint_free(
+            parent=-1,
+            child=body,
+            parent_xform=identity_xform,
+            child_xform=child_xform_offset,
+        )
+        builder.add_articulation([j_root], label="floating_body")
+
+        model = builder.finalize(device=self.device)
+        state = model.state()
+        inverse_dynamics = model.inverse_dynamics()
+
+        # Body world rotation R_b = R_c^T = R(z, -2 * half_angle).
+        body_z_angle = -2.0 * half_angle
+        cos_b, sin_b = float(np.cos(body_z_angle)), float(np.sin(body_z_angle))
+        R_b = np.array(
+            [
+                [cos_b, -sin_b, 0.0],
+                [sin_b, cos_b, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        I_world = R_b @ np.diag(I_diag) @ R_b.T
+
+        v_com_cases = [
+            (0.0, 0.0, 0.0),
+            (0.1, -0.2, 0.05),
+        ]
+        omega_cases = [
+            (0.3, -0.1, 0.2),
+            (0.3, -0.1, 0.2),
+        ]
+        num_cases = len(v_com_cases)
+
+        for i in range(num_cases):
+            v_com_values = v_com_cases[i]
+            omega_values = omega_cases[i]
+            with self.subTest(v_com=v_com_values, omega=omega_values):
+                joint_q = state.joint_q.numpy()
+                joint_q[:] = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)  # joint_q = identity
+                state.joint_q.assign(joint_q)
+                joint_qd = state.joint_qd.numpy()
+                joint_qd[:] = (*v_com_values, *omega_values)
+                state.joint_qd.assign(joint_qd)
+                newton.eval_fk(model, state.joint_q, state.joint_qd, state)
+
+                newton.eval_inverse_dynamics(
+                    model,
+                    state,
+                    newton.InverseDynamics.EvalType.CORIOLIS_COMPENSATION_FORCE,
+                    inverse_dynamics,
+                )
+                # Flip Newton's negation convention back to standard
+                # +C(q, q_dot) * q_dot for comparison with the closed form.
+                measured_linear = -inverse_dynamics.coriolis_compensation_force.numpy()[0:3]
+                measured_angular = -inverse_dynamics.coriolis_compensation_force.numpy()[3:6]
+
+                omega = np.asarray(omega_values, dtype=np.float64)
+                expected_linear = np.zeros(3)
+                expected_angular = np.cross(omega, I_world @ omega)
+
+                np.testing.assert_allclose(measured_linear, expected_linear, atol=1e-5, rtol=1e-5)
+                np.testing.assert_allclose(measured_angular, expected_angular, atol=1e-5, rtol=1e-5)
+
     def test_coriolis_fixed_root_chain_with_com_offsets(self):
         """Verify Coriolis comp force for a fixed-root revolute chain with non-zero link CoMs.
 
