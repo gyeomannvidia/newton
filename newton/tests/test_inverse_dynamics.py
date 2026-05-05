@@ -76,6 +76,9 @@ class TestInverseDynamicsBase:
             com=link_coms[0],
         )
         if floating_base:
+            # ``parent_xform.rotation`` is left at identity to avoid a known
+            # MuJoCo-bridge convention bug for free joints with a rotated
+            # parent frame: https://github.com/newton-physics/newton/issues/2704.
             j1 = builder.add_joint_free(
                 parent=-1,
                 child=b1,
@@ -1624,6 +1627,9 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
             inertia=I_body,
             com=r_com,
         )
+        # ``parent_xform.rotation`` is left at identity to avoid a known
+        # MuJoCo-bridge convention bug for free joints with a rotated
+        # parent frame: https://github.com/newton-physics/newton/issues/2704.
         j_root = builder.add_joint_free(
             parent=-1,
             child=body,
@@ -1733,6 +1739,9 @@ class TestCoriolisCompForce(TestInverseDynamicsBase):
             inertia=I_body,
             com=r_com,
         )
+        # ``parent_xform.rotation`` is left at identity to avoid a known
+        # MuJoCo-bridge convention bug for free joints with a rotated
+        # parent frame: https://github.com/newton-physics/newton/issues/2704.
         j_root = builder.add_joint_free(
             parent=-1,
             child=body,
@@ -2119,6 +2128,14 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
         # geometry. Quaternion (x, y, z, w) for a 30 deg rotation about world +Y
         # is (0, sin(15 deg), 0, cos(15 deg)).
         joint_quat = wp.quat(0.0, float(np.sin(np.pi / 12.0)), 0.0, float(np.cos(np.pi / 12.0)))
+        # Root-joint parent_xform with a non-identity translation so the root
+        # joint frame is offset from world for every articulation -- exercising
+        # the FK path on fixed roots and the world-frame body placement on
+        # floating roots. ``parent_xform`` rotation and ``child_xform`` are
+        # left at identity on the root joint to avoid a known MuJoCo-bridge
+        # convention bug for free joints with a rotated parent frame:
+        # https://github.com/newton-physics/newton/issues/2704.
+        root_parent_xform = wp.transform(wp.vec3(0.7, -0.4, 0.3), wp.quat_identity())
         # Non-zero CoM offset applied to every link (root and inboard) so the
         # test exercises off-axis mass distribution everywhere -- including
         # the floating-root case where the public free-joint v_com convention
@@ -2141,14 +2158,14 @@ class TestManipulatorEquation(TestInverseDynamicsBase):
                 j0 = b.add_joint_free(
                     parent=-1,
                     child=link0,
-                    parent_xform=identity_xform,
+                    parent_xform=root_parent_xform,
                     child_xform=identity_xform,
                 )
             else:
                 j0 = b.add_joint_fixed(
                     parent=-1,
                     child=link0,
-                    parent_xform=identity_xform,
+                    parent_xform=root_parent_xform,
                     child_xform=identity_xform,
                 )
             link1 = b.add_link(
