@@ -49,6 +49,18 @@ buffers of kernels with many atomics per thread. It does not enable the
 collision pipeline's contact sorting, which follows only the pipeline's own
 ``deterministic`` flag.
 
+A USD scene can request a mode with the ``newton:deterministic`` token of
+``NewtonSceneAPI`` on its ``PhysicsScene``. :meth:`ModelBuilder.add_usd`
+returns the matching :class:`warp.DeterministicMode` under the
+``"deterministic"`` key, or ``None`` for ``inherit``. Pass it to the solver:
+
+.. code-block:: python
+
+   builder = newton.ModelBuilder()
+   result = builder.add_usd("scene.usda")
+   model = builder.finalize()
+   solver = newton.solvers.SolverXPBD(model, deterministic=result["deterministic"])
+
 Sources of nondeterminism
 -------------------------
 

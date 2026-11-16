@@ -1,0 +1,1 @@
+Read `NewtonSceneAPI`'s `newton:deterministic` token in `ModelBuilder.add_usd()` and return it as a `warp.DeterministicMode` (or `None` for `inherit`) under the `"deterministic"` key of the result, ready to pass as the `deterministic` argument of a solver constructor.

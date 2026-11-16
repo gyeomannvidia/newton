@@ -5020,6 +5020,10 @@ class ModelBuilder:
                   - Dictionary of collected per-prim schema attributes (dict)
                 * - ``"max_solver_iterations"``
                   - The resolved maximum solver iterations (int or None)
+                * - ``"deterministic"``
+                  - The :class:`warp.DeterministicMode` requested by the PhysicsScene's ``newton:deterministic``
+                    token, or ``None`` if the token is ``inherit``, unauthored, or no PhysicsScene was found.
+                    Pass it as the ``deterministic`` argument of a solver constructor.
                 * - ``"particle_scene_path"``
                   - Governing ``UsdPhysics.Scene`` prim path for imported particle simulation geometry, or ``None`` when no particles are imported
                 * - ``"path_body_relative_transform"``

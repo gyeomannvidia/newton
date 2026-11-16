@@ -136,6 +136,7 @@ class SchemaResolverNewton(SchemaResolver):
             "max_solver_iterations": SchemaAttribute("newton:maxSolverIterations", -1),
             "time_steps_per_second": SchemaAttribute("newton:timeStepsPerSecond", 1000),
             "gravity_enabled": SchemaAttribute("newton:gravityEnabled", True),
+            "deterministic": SchemaAttribute("newton:deterministic", "inherit"),
         },
         PrimType.JOINT: {
             "armature": SchemaAttribute("newton:armature", 0.0),

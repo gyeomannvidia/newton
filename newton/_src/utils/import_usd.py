@@ -96,6 +96,25 @@ def _is_uniform_scale(scale, rel_tol: float = 1.0e-6) -> bool:
     return hi - lo <= rel_tol * max(abs(lo), abs(hi))
 
 
+def _parse_deterministic_token(token: Any, scene_path: str) -> wp.DeterministicMode | None:
+    """Convert a ``NewtonSceneAPI`` ``newton:deterministic`` token to a :class:`warp.DeterministicMode`.
+
+    Returns ``None`` for ``inherit`` or an unauthored token, which means "use ``wp.config.deterministic``".
+    """
+    if token is None:
+        return None
+    modes = {
+        "inherit": None,
+        "notGuaranteed": wp.DeterministicMode.NOT_GUARANTEED,
+        "runToRun": wp.DeterministicMode.RUN_TO_RUN,
+        "gpuToGpu": wp.DeterministicMode.GPU_TO_GPU,
+    }
+    token = str(token)
+    if token not in modes:
+        raise ValueError(f"{scene_path}: newton:deterministic must be one of {list(modes)}, got {token!r}.")
+    return modes[token]
+
+
 def _warn_mirrored_body_transform(usd_prim, key: str, xform_cache) -> None:
     """Warn when a rigid body prim has an improper (mirrored) world transform.
 
@@ -428,6 +447,10 @@ def parse_usd(
               - Dictionary of collected per-prim schema attributes (dict)
             * - ``"max_solver_iterations"``
               - The resolved maximum solver iterations (int or None)
+            * - ``"deterministic"``
+              - The :class:`warp.DeterministicMode` requested by the PhysicsScene's ``newton:deterministic``
+                token, or ``None`` if the token is ``inherit``, unauthored, or no PhysicsScene was found.
+                Pass it as the ``deterministic`` argument of a solver constructor.
             * - ``"particle_scene_path"``
               - Governing ``UsdPhysics.Scene`` prim path for imported particle simulation geometry, or ``None`` when no particles are imported
             * - ``"path_body_relative_transform"``
@@ -660,6 +683,7 @@ def parse_usd(
 
     physics_dt = None
     max_solver_iters = None
+    deterministic = None
     particle_scene_prim = None
 
     visual_shape_cfg = ModelBuilder.ShapeConfig(
@@ -1305,6 +1329,10 @@ def parse_usd(
         max_solver_iters = R.get_value(
             physics_scene_prim, prim_type=PrimType.SCENE, key="max_solver_iterations", default=None, verbose=verbose
         )
+        deterministic_token = R.get_value(
+            physics_scene_prim, prim_type=PrimType.SCENE, key="deterministic", default=None, verbose=verbose
+        )
+        deterministic = _parse_deterministic_token(deterministic_token, str(physics_scene_prim.GetPath()))
 
     stage_up_axis = Axis.from_string(str(UsdGeom.GetStageUpAxis(stage)))
 
@@ -2907,6 +2935,7 @@ def parse_usd(
         # "articulation_roots": articulation_roots,
         "path_body_relative_transform": path_body_relative_transform,
         "max_solver_iterations": max_solver_iters,
+        "deterministic": deterministic,
         "particle_scene_path": str(particle_scene_prim.GetPath()) if particle_scene_prim is not None else None,
         "actuator_count": actuator_count,
     }

@@ -47,6 +47,18 @@ _MIRRORED_BODY_WARNING = (
 _PARTIAL_EQ_SOLREF_WARNING = r"Custom attribute 'mujoco:eq_solref' has \d+ values but frequency"
 
 
+def _has_scene_deterministic() -> bool:
+    """Return whether the installed schemas give ``NewtonSceneAPI`` a ``newton:deterministic`` attribute."""
+    if not USD_AVAILABLE:
+        return False
+    from pxr import Usd
+
+    definition = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("NewtonSceneAPI")
+    if not definition:
+        return False
+    return "newton:deterministic" in definition.GetPropertyNames()
+
+
 class TestImportUsdPhysics(unittest.TestCase):
     @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
     def test_nonfinite_contact_materials_rejected_at_finalize(self):
@@ -9233,6 +9245,98 @@ def Xform "Articulation" (
         result = builder.add_usd(stage)
         # max_solver_iterations should be 200
         self.assertEqual(result["max_solver_iterations"], 200)
+
+    def _deterministic_stage(self, token: str | None, with_scene: bool = True):
+        """Create a one-body stage. Author ``newton:deterministic`` on the scene unless ``token`` is None."""
+        from pxr import Sdf, Usd, UsdGeom, UsdPhysics
+
+        stage = Usd.Stage.CreateInMemory()
+        UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+        if with_scene:
+            scene_prim = UsdPhysics.Scene.Define(stage, "/physicsScene").GetPrim()
+            scene_prim.ApplyAPI("NewtonSceneAPI")
+            if token is not None:
+                attr = scene_prim.CreateAttribute("newton:deterministic", Sdf.ValueTypeNames.Token)
+                attr.Set(token)
+        body_prim = UsdGeom.Cube.Define(stage, "/Body").GetPrim()
+        UsdPhysics.RigidBodyAPI.Apply(body_prim)
+        UsdPhysics.CollisionAPI.Apply(body_prim)
+        return stage
+
+    def _parsed_deterministic(self, token: str | None, with_scene: bool = True):
+        builder = newton.ModelBuilder()
+        result = builder.add_usd(self._deterministic_stage(token, with_scene))
+        return result["deterministic"]
+
+    @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
+    def test_scene_deterministic_no_scene(self):
+        """Without a PhysicsScene, ``deterministic`` is None."""
+        self.assertIsNone(self._parsed_deterministic(None, with_scene=False))
+
+    @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
+    def test_scene_deterministic_unauthored(self):
+        """An unauthored ``newton:deterministic`` gives None."""
+        self.assertIsNone(self._parsed_deterministic(None))
+
+    @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
+    def test_scene_deterministic_inherit(self):
+        """``inherit`` gives None."""
+        self.assertIsNone(self._parsed_deterministic("inherit"))
+
+    @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
+    def test_scene_deterministic_not_guaranteed(self):
+        """``notGuaranteed`` gives ``wp.DeterministicMode.NOT_GUARANTEED``."""
+        self.assertEqual(self._parsed_deterministic("notGuaranteed"), wp.DeterministicMode.NOT_GUARANTEED)
+
+    @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
+    def test_scene_deterministic_run_to_run(self):
+        """``runToRun`` gives ``wp.DeterministicMode.RUN_TO_RUN``."""
+        self.assertEqual(self._parsed_deterministic("runToRun"), wp.DeterministicMode.RUN_TO_RUN)
+
+    @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
+    def test_scene_deterministic_gpu_to_gpu(self):
+        """``gpuToGpu`` gives ``wp.DeterministicMode.GPU_TO_GPU``."""
+        self.assertEqual(self._parsed_deterministic("gpuToGpu"), wp.DeterministicMode.GPU_TO_GPU)
+
+    @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
+    def test_scene_deterministic_invalid_raises(self):
+        """An unknown token raises ``ValueError``."""
+        with self.assertRaisesRegex(ValueError, "newton:deterministic"):
+            self._parsed_deterministic("bogus")
+
+    @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
+    def test_scene_deterministic_passed_to_mujoco(self):
+        """The parsed value configures ``SolverMuJoCo`` when passed as ``deterministic``."""
+        try:
+            SolverMuJoCo.import_mujoco()
+        except ImportError:
+            self.skipTest("MuJoCo is not installed")
+        builder = newton.ModelBuilder()
+        result = builder.add_usd(self._deterministic_stage("runToRun"))
+        model = builder.finalize()
+        solver = SolverMuJoCo(model, use_mujoco_cpu=True, deterministic=result["deterministic"])
+        self.assertEqual(solver._deterministic, wp.DeterministicMode.RUN_TO_RUN)
+
+    @unittest.skipUnless(_has_scene_deterministic(), "Requires newton-usd-schemas with newton:deterministic")
+    def test_scene_deterministic_schema_default_is_inherit(self):
+        """The schema fallback for ``newton:deterministic`` is ``inherit``."""
+        from pxr import Usd, UsdPhysics
+
+        stage = Usd.Stage.CreateInMemory()
+        scene_prim = UsdPhysics.Scene.Define(stage, "/physicsScene").GetPrim()
+        scene_prim.ApplyAPI("NewtonSceneAPI")
+        self.assertEqual(scene_prim.GetAttribute("newton:deterministic").Get(), "inherit")
+
+    @unittest.skipUnless(_has_scene_deterministic(), "Requires newton-usd-schemas with newton:deterministic")
+    def test_scene_deterministic_schema_tokens(self):
+        """The schema allows exactly the tokens that ``add_usd`` accepts."""
+        from pxr import Usd, UsdPhysics
+
+        stage = Usd.Stage.CreateInMemory()
+        scene_prim = UsdPhysics.Scene.Define(stage, "/physicsScene").GetPrim()
+        scene_prim.ApplyAPI("NewtonSceneAPI")
+        tokens = list(scene_prim.GetAttribute("newton:deterministic").GetMetadata("allowedTokens"))
+        self.assertEqual(tokens, ["inherit", "notGuaranteed", "runToRun", "gpuToGpu"])
 
     @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
     def test_mesh_max_hull_vertices_parsing(self):
